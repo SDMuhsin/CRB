@@ -661,7 +661,7 @@ def get_model(model_name):
     torch.nn.init.uniform_ = skip
     torch.nn.init.normal_ = skip
 
-    downloads_dir = "./downloads"
+    downloads_dir = os.environ.get("BILLM_DOWNLOADS_DIR", "./downloads")
 
     if "opt" in model_name.lower():
         from transformers import OPTForCausalLM

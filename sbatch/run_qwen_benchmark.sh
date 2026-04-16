@@ -273,8 +273,10 @@ for technique in "${techniques[@]}"; do
         export PIP_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/pip"
         export XDG_CACHE_HOME="$CACHE_ROOT_LOCAL/.cache"
         export TMPDIR="${SLURM_TMPDIR:-$CACHE_ROOT_LOCAL/tmp}"
+        export BILLM_DOWNLOADS_DIR="$CACHE_ROOT_LOCAL/downloads"
         mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
-                 "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR"
+                 "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR" \
+                 "$BILLM_DOWNLOADS_DIR"
         export HF_DATASETS_OFFLINE=1
         export TRANSFORMERS_OFFLINE=1
         export HF_HUB_OFFLINE=1
@@ -325,6 +327,9 @@ export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
 export HF_HUB_CACHE="\$CACHE_ROOT/hf/hub"
 export TRANSFORMERS_CACHE="\$CACHE_ROOT/hf"
 export TORCH_HOME="\$CACHE_ROOT/torch"
+# Project-level override read by datautils.py / run.py / PB-LLM / src/run_*.py
+# — replaces every hardcoded ./downloads/... path with an absolute scratch path.
+export BILLM_DOWNLOADS_DIR="\$CACHE_ROOT/downloads"
 # \$HOME-default caches that must not leak back: numba JIT (LNQ uses it),
 # pip wheels, generic XDG cache, and unpacking TMPDIR.
 export NUMBA_CACHE_DIR="\$CACHE_ROOT/.cache/numba"
@@ -338,7 +343,8 @@ else
     export TMPDIR="\$CACHE_ROOT/tmp"
 fi
 mkdir -p "\$HF_HOME" "\$HF_DATASETS_CACHE" "\$HF_HUB_CACHE" "\$TORCH_HOME" \\
-         "\$NUMBA_CACHE_DIR" "\$PIP_CACHE_DIR" "\$XDG_CACHE_HOME" "\$TMPDIR"
+         "\$NUMBA_CACHE_DIR" "\$PIP_CACHE_DIR" "\$XDG_CACHE_HOME" "\$TMPDIR" \\
+         "\$BILLM_DOWNLOADS_DIR"
 
 # Compute nodes have no internet — caches must be pre-warmed via download_cache.sh.
 export HF_DATASETS_OFFLINE=1

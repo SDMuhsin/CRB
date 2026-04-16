@@ -11,7 +11,7 @@ def set_seed(seed):
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-downloads_dir = "./downloads"
+downloads_dir = os.environ.get("BILLM_DOWNLOADS_DIR", "./downloads")
 
 '''
 Generate tokenizer and return it to preload datasets by converting them to embedded vectors instead of natural words
@@ -199,25 +199,38 @@ def get_redpajama(nsamples, seed, seqlen, model, tokenizer):
 
 
 def get_loaders(name, nsamples=128, seed=0, seqlen=2048, model=''):
-    cache_file=f'./downloads/DOWNLOAD_{name}_{nsamples}_{seed}_{seqlen}_{model}.pt'
+    cache_file=f'{downloads_dir}/DOWNLOAD_{name}_{nsamples}_{seed}_{seqlen}_{model}.pt'
     try:
         return torch.load(cache_file)
     except:
         pass
 
-    tokenizer = get_tokenizer(model)
-    
-    if 'wikitext2' in name:
-        loaders= get_wikitext2(nsamples, seed, seqlen, model, tokenizer)
-    if 'ptb' in name:
-        loaders= get_ptb(nsamples, seed, seqlen, model, tokenizer)
-    if 'c4' in name:
-        loaders= get_c4(nsamples, seed, seqlen, model, tokenizer)
-    if 'redpajama' in name:
-        loaders= get_redpajama(nsamples, seed, seqlen, model, tokenizer)
-    directory='/'.join(cache_file.split('/')[:-1])
+    # Concurrent benchmark jobs hitting the same cache miss would each spend
+    # GBs tokenizing in parallel and racing to torch.save the same file.
+    # Serialise on a sibling .lock so only one job builds the cache; the rest
+    # block, then load the freshly written cache when their turn comes.
+    import fcntl
+    directory = os.path.dirname(cache_file) or '.'
     if not os.path.exists(directory):
-        os.makedirs(directory)
+        os.makedirs(directory, exist_ok=True)
+    lock_path = cache_file + '.lock'
+    with open(lock_path, 'w') as lock_f:
+        fcntl.flock(lock_f, fcntl.LOCK_EX)
+        # Re-check after acquiring lock — another job may have just finished.
+        try:
+            return torch.load(cache_file)
+        except Exception:
+            pass
 
-    torch.save(loaders,cache_file)
-    return loaders
+        tokenizer = get_tokenizer(model)
+        if 'wikitext2' in name:
+            loaders = get_wikitext2(nsamples, seed, seqlen, model, tokenizer)
+        if 'ptb' in name:
+            loaders = get_ptb(nsamples, seed, seqlen, model, tokenizer)
+        if 'c4' in name:
+            loaders = get_c4(nsamples, seed, seqlen, model, tokenizer)
+        if 'redpajama' in name:
+            loaders = get_redpajama(nsamples, seed, seqlen, model, tokenizer)
+
+        torch.save(loaders, cache_file)
+        return loaders

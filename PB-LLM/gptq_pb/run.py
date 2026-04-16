@@ -9,7 +9,7 @@ from high_quant import HighQuantizer
 from low_quant import LowQuantizer
 from modelutils import find_layers
 
-downloads_dir = "./downloads"
+downloads_dir = os.environ.get("BILLM_DOWNLOADS_DIR", "./downloads")
 def get_model(model_name):
     def skip(*args, **kwargs):
         pass
@@ -36,11 +36,11 @@ def get_model(model_name):
             model.seqlen = 2048
         elif "bloom" in model_name.lower():
             from transformers import BloomForCausalLM
-            model = BloomForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir="./downloads", attn_implementation="eager")
+            model = BloomForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, attn_implementation="eager")
             model.seqlen = 2048
         elif "qwen" in model_name.lower():
             from transformers import AutoModelForCausalLM
-            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir="./downloads", attn_implementation="eager")
+            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, attn_implementation="eager")
             model.seqlen = min(model.config.max_position_embeddings, 2048)
         else:
             raise ValueError("Unsupported model type")

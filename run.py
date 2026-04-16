@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src
 from csv_utils import append_result as _csv_append
 
 
-downloads_dir = "./downloads"
+downloads_dir = os.environ.get("BILLM_DOWNLOADS_DIR", "./downloads")
 def get_model(model_name):
     def skip(*args, **kwargs):
         pass

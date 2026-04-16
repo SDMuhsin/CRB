@@ -69,6 +69,10 @@ export HF_HUB_CACHE="$CACHE_ROOT/hf/hub"
 export TRANSFORMERS_CACHE="$CACHE_ROOT/hf"
 export TORCH_HOME="$CACHE_ROOT/torch"
 export HF_HUB_DISABLE_XET=1
+# Project-level override read by datautils.py / run.py / PB-LLM / src/run_*.py.
+# This is the explicit, non-symlink-based way to redirect every hardcoded
+# ./downloads/... path the project uses.
+export BILLM_DOWNLOADS_DIR="$CACHE_ROOT/downloads"
 # Anything that defaults to $HOME/.cache/* must be redirected too — $HOME on
 # Nibi has only ~50 GiB and goes over-quota fast (numba JIT, pip wheels, etc.).
 export NUMBA_CACHE_DIR="$CACHE_ROOT/.cache/numba"
@@ -76,17 +80,19 @@ export PIP_CACHE_DIR="$CACHE_ROOT/.cache/pip"
 export XDG_CACHE_HOME="$CACHE_ROOT/.cache"
 export TMPDIR="$CACHE_ROOT/tmp"
 mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
-         "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR"
+         "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR" \
+         "$BILLM_DOWNLOADS_DIR"
 
 echo ""
 echo "Cache layout (resolved real paths — these are what writes actually hit):"
-echo "  CACHE_ROOT          = $CACHE_ROOT"
-echo "  ./downloads         -> $(readlink -f ./downloads 2>/dev/null || echo MISSING)"
-echo "  HF_HOME             -> $(readlink -f "$HF_HOME" 2>/dev/null || echo "$HF_HOME (not yet created)")"
-echo "  HF_DATASETS_CACHE   -> $(readlink -f "$HF_DATASETS_CACHE" 2>/dev/null || echo "$HF_DATASETS_CACHE (not yet created)")"
-echo "  HF_HUB_CACHE        -> $(readlink -f "$HF_HUB_CACHE" 2>/dev/null || echo "$HF_HUB_CACHE (not yet created)")"
-echo "  TORCH_HOME          -> $(readlink -f "$TORCH_HOME" 2>/dev/null || echo "$TORCH_HOME (not yet created)")"
-echo "  NUMBA_CACHE_DIR     -> $(readlink -f "$NUMBA_CACHE_DIR" 2>/dev/null || echo "$NUMBA_CACHE_DIR (not yet created)")"
+echo "  CACHE_ROOT             = $CACHE_ROOT"
+echo "  BILLM_DOWNLOADS_DIR    = $BILLM_DOWNLOADS_DIR"
+echo "  ./downloads            -> $(readlink -f ./downloads 2>/dev/null || echo MISSING)"
+echo "  HF_HOME                -> $(readlink -f "$HF_HOME" 2>/dev/null || echo "$HF_HOME (not yet created)")"
+echo "  HF_DATASETS_CACHE      -> $(readlink -f "$HF_DATASETS_CACHE" 2>/dev/null || echo "$HF_DATASETS_CACHE (not yet created)")"
+echo "  HF_HUB_CACHE           -> $(readlink -f "$HF_HUB_CACHE" 2>/dev/null || echo "$HF_HUB_CACHE (not yet created)")"
+echo "  TORCH_HOME             -> $(readlink -f "$TORCH_HOME" 2>/dev/null || echo "$TORCH_HOME (not yet created)")"
+echo "  NUMBA_CACHE_DIR        -> $(readlink -f "$NUMBA_CACHE_DIR" 2>/dev/null || echo "$NUMBA_CACHE_DIR (not yet created)")"
 echo ""
 
 # Hard guard: if ./downloads ends up resolving anywhere under /project or
@@ -155,38 +161,42 @@ print(f'  Done: allenai/c4 (1 shard, {len(ds):,} rows)')
 echo ""
 
 # ============================================================================
-# Pre-tokenize calibration sets to avoid first-job cache miss races
+# NOTE: pre-tokenization is intentionally NOT done here.
 # ============================================================================
 #
-# datautils.get_loaders() caches tokenized samples at
-# ./downloads/DOWNLOAD_<name>_<nsamples>_<seed>_<seqlen>_<model>.pt
-# (now resolves through the symlink to $SCRATCH/billm2_cache/).
-# Pre-warming on the login node prevents two compute jobs racing on the
-# same write target (and the resulting file corruption).
+# Earlier versions tokenized the full redpajama (1024 × 4096) calibration set
+# on the login node so the first benchmark job wouldn't pay the cost. That
+# step joins ~83K C4 documents into a single string and tokenizes to a
+# 2.5M-token tensor — it OOM-killed (login-node cgroup ~16 GB).
+#
+# Race-safety on the cache file is now handled by an fcntl flock added to
+# datautils.get_loaders (DOWNLOAD_*.pt.lock). Concurrent jobs serialize:
+# the first one tokenizes, the rest block on the lock then load the cache.
+# So the only cost we pay is one extra tokenization on the FIRST sbatch
+# job — which has the right memory budget for it (16 GB, see GPU_SMALL job
+# spec in run_qwen_benchmark.sh).
+#
+# If you really want to pre-tokenize (e.g., to keep first-job wall time
+# down), submit it as its own tiny sbatch job — don't run it on the login
+# node:
+#
+#   sbatch --time=00:30:00 --mem=16G --cpus-per-task=4 --wrap='
+#     source ./env/bin/activate
+#     export BILLM_DOWNLOADS_DIR=$SCRATCH/billm2_cache/downloads
+#     export HF_HOME=$SCRATCH/billm2_cache/hf
+#     python -c "
+#     import sys; sys.path.insert(0, \".\")
+#     from datautils import get_loaders
+#     get_loaders(\"wikitext2\", nsamples=128, seed=0, seqlen=2048,
+#                 model=\"Qwen/Qwen2.5-0.5B\")
+#     get_loaders(\"redpajama\", nsamples=1024, seed=0, seqlen=4096,
+#                 model=\"Qwen/Qwen2.5-0.5B\")"
+#   '
 # ============================================================================
 
-echo "=== Pre-tokenizing calibration caches ==="
-
-MODEL="Qwen/Qwen2.5-0.5B"
-
-python -c "
-import sys, os
-sys.path.insert(0, os.getcwd())
-from datautils import get_loaders
-
-model = '$MODEL'
-
-# wikitext2: 128 samples × 2048 — used by run.py default + SINQ + TesseraQ + PB-LLM
-print(f'Tokenizing wikitext2/128/2048 for {model}...')
-get_loaders('wikitext2', nsamples=128, seed=0, model=model, seqlen=2048)
-
-# redpajama (one C4 shard): 1024 samples × 4096 — used by run_lnq.py faithful preset
-print(f'Tokenizing redpajama/1024/4096 for {model}...')
-get_loaders('redpajama', nsamples=1024, seed=0, model=model, seqlen=4096)
-
-print('Calibration caches written under ./downloads/ (-> \$SCRATCH).')
-"
-
+echo "=== Skipping pre-tokenization on login node (would OOM-kill). ==="
+echo "    The first sbatch job will tokenize and write the cache;"
+echo "    subsequent jobs block on the .lock then load it."
 echo ""
 echo "============================================"
 echo "All downloads complete."
