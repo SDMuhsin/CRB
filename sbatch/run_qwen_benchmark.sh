@@ -17,6 +17,8 @@
 #     lnq           GuidedQuant/LNQ faithful: redpajama/1024/4096,
 #                   no_propagate, num_groups=4     (~2.03 bpw)
 #     tesseraq      TesseraQ, bit=2, 250 optim iters (~2.25 bpw)
+#     pb-llm        PB-LLM partial binarization: xnor, low_frac=0.9,
+#                   high_bit=8 (~1.7 bpw — closest PB-LLM config to 2 bit)
 #
 #   ~1 bit per weight ----------------------------------------------------
 #     doml-binary   DOML K=2 (Lloyd-Max 2-level) + GPTQ + structural
@@ -104,6 +106,9 @@ SINQ_GROUPSIZE=64
 TESSERAQ_BIT=2
 TESSERAQ_GROUPSIZE=128
 TESSERAQ_ITERATIONS=250
+PBLLM_METHOD="xnor"             # PB-LLM partial-binarization variant
+PBLLM_LOW_FRAC=0.9              # fraction of weights kept binary (10% high-prec)
+PBLLM_HIGH_BIT=8                # high-precision tier bit width
 
 # Methods to benchmark — one sbatch job per entry.
 techniques=(
@@ -113,6 +118,7 @@ techniques=(
     "sinq"
     "lnq"
     "tesseraq"
+    "pb-llm"
     "doml-binary"
     "braq"
 )
@@ -149,6 +155,7 @@ get_time_limit() {
         rtn-2bit)     echo "00:30:00" ;;  # no GPTQ pass
         gptq-2bit)    echo "00:45:00" ;;
         sinq)         echo "00:40:00" ;;
+        pb-llm)       echo "00:50:00" ;;
         doml-binary)  echo "00:50:00" ;;
         braq)         echo "00:50:00" ;;
         tesseraq)     echo "02:30:00" ;;  # 250 optim iters
@@ -190,6 +197,11 @@ build_python_cmd() {
         lnq)
             echo "python3 -u src/run_lnq.py $MODEL $DATASET --full_pipeline --no_propagate --calib_dataset $LNQ_CALIB --nsamples $LNQ_NSAMPLES --seqlen $LNQ_SEQLEN --num_groups $LNQ_NUM_GROUPS --nbits $LNQ_NBITS --seed $SEED --device cuda:0 $common_evals"
             ;;
+        pb-llm)
+            # PB-LLM has its own runner under PB-LLM/gptq_pb/run.py; it sets
+            # PYTHONPATH internally to find ../../src/csv_utils.
+            echo "python3 -u PB-LLM/gptq_pb/run.py $MODEL $DATASET $PBLLM_METHOD --low_frac $PBLLM_LOW_FRAC --high_bit $PBLLM_HIGH_BIT --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED $common_evals"
+            ;;
         *)
             echo "echo 'Unknown technique: $technique'; exit 1"
             ;;
@@ -204,6 +216,7 @@ get_technique_desc() {
         sinq)         echo "SINQ (nbits=$SINQ_NBITS, group_size=$SINQ_GROUPSIZE)"           ;;
         lnq)          echo "GuidedQuant/LNQ (nbits=$LNQ_NBITS, $LNQ_CALIB/$LNQ_NSAMPLES/$LNQ_SEQLEN, groups=$LNQ_NUM_GROUPS, no_propagate)" ;;
         tesseraq)     echo "TesseraQ (bit=$TESSERAQ_BIT, gs=$TESSERAQ_GROUPSIZE, iters=$TESSERAQ_ITERATIONS)" ;;
+        pb-llm)       echo "PB-LLM ($PBLLM_METHOD, low_frac=$PBLLM_LOW_FRAC, high_bit=$PBLLM_HIGH_BIT, blocksize=$BLOCKSIZE)" ;;
         doml-binary)  echo "DOML-binary (K=2, Lloyd-Max + GPTQ + structural partition)"     ;;
         braq)         echo "BRAQ 1-bit baseline (blocksize=$BLOCKSIZE)"                     ;;
     esac

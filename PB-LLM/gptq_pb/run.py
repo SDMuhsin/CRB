@@ -377,18 +377,18 @@ if __name__ == "__main__":
             ppl = llama_eval(model, testloader, device, dataset, args.log_wandb,save_title=save_title)
         elif "bloom" in args.model.lower():
             import sys
-            sys.path.insert(0, "/workspace/BiLLM2")
+            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
             from eval_ppl_utils import bloom_eval
             ppl = bloom_eval(model, testloader, device, dataset, args.log_wandb, save_title=save_title)
         elif "qwen" in args.model.lower():
             import sys
-            sys.path.insert(0, "/workspace/BiLLM2")
+            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
             from eval_ppl_utils import qwen_eval
             ppl = qwen_eval(model, testloader, device, dataset, args.log_wandb, save_title=save_title)
 
         # CSV output
         if ppl is not None:
-            sys.path.insert(0, "/workspace/BiLLM2/src")
+            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
             from csv_utils import append_result as _csv_append
             _csv_append(
                 model=args.model, method="pbllm", dataset=dataset,
@@ -402,8 +402,8 @@ if __name__ == "__main__":
 
     # CSV helper for downstream evals
     import sys
-    sys.path.insert(0, "/workspace/BiLLM2/src")
-    sys.path.insert(0, "/workspace/BiLLM2")
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
     from csv_utils import append_result as _csv_append
     def _pb_csv(metric, value):
         _csv_append(
