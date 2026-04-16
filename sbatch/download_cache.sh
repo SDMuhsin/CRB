@@ -79,13 +79,27 @@ mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
          "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR"
 
 echo ""
-echo "Cache layout:"
+echo "Cache layout (resolved real paths — these are what writes actually hit):"
 echo "  CACHE_ROOT          = $CACHE_ROOT"
-echo "  HF_HOME             = $HF_HOME"
-echo "  HF_DATASETS_CACHE   = $HF_DATASETS_CACHE"
-echo "  HF_HUB_CACHE        = $HF_HUB_CACHE"
-echo "  ./downloads         -> $(readlink -f ./downloads)"
+echo "  ./downloads         -> $(readlink -f ./downloads 2>/dev/null || echo MISSING)"
+echo "  HF_HOME             -> $(readlink -f "$HF_HOME" 2>/dev/null || echo "$HF_HOME (not yet created)")"
+echo "  HF_DATASETS_CACHE   -> $(readlink -f "$HF_DATASETS_CACHE" 2>/dev/null || echo "$HF_DATASETS_CACHE (not yet created)")"
+echo "  HF_HUB_CACHE        -> $(readlink -f "$HF_HUB_CACHE" 2>/dev/null || echo "$HF_HUB_CACHE (not yet created)")"
+echo "  TORCH_HOME          -> $(readlink -f "$TORCH_HOME" 2>/dev/null || echo "$TORCH_HOME (not yet created)")"
+echo "  NUMBA_CACHE_DIR     -> $(readlink -f "$NUMBA_CACHE_DIR" 2>/dev/null || echo "$NUMBA_CACHE_DIR (not yet created)")"
 echo ""
+
+# Hard guard: if ./downloads ends up resolving anywhere under /project or
+# /home, abort — that would silently fill the wrong quota.
+DL_REAL=$(readlink -f ./downloads 2>/dev/null || echo "")
+case "$DL_REAL" in
+    /project/*|/home/*|"$HOME"/*)
+        echo "ABORT: ./downloads resolves to '$DL_REAL', which is on /project or \$HOME."
+        echo "       Those filesystems have small quotas. Set \$SCRATCH or fix the symlink."
+        exit 1
+        ;;
+esac
+unset DL_REAL
 
 # ============================================================================
 # Models — Qwen2.5-0.5B is the target for this benchmark suite
@@ -176,7 +190,10 @@ print('Calibration caches written under ./downloads/ (-> \$SCRATCH).')
 echo ""
 echo "============================================"
 echo "All downloads complete."
-echo "Cache root:   $CACHE_ROOT"
-echo "Disk usage:   $(du -sh "$CACHE_ROOT" 2>/dev/null | cut -f1)"
-echo "Next step:    sbatch ./sbatch/run_qwen_benchmark.sh"
+echo "Cache root:                       $CACHE_ROOT"
+echo "Total cache size on \$SCRATCH:     $(du -sh "$CACHE_ROOT" 2>/dev/null | cut -f1)"
+# -x stops at filesystem boundary, so this only counts bytes that LIVE on
+# /project (i.e., excludes anything reached via the symlink). It must be ~0.
+echo "Bytes that leaked to /project:    $(du -shx "$(pwd)/downloads" 2>/dev/null | cut -f1) (should be tiny — just the symlink)"
+echo "Next step:                        sbatch ./sbatch/run_qwen_benchmark.sh"
 echo "============================================"
