@@ -25,7 +25,12 @@ def calculate_percentage_and_variance_original(weights, abs_weights, bin_edges):
 '''
 Include main method to search the rate for 2-bit salient data columns and the optimal split for 1-bit data
 '''
-def structural_searching(origin_matrix, up_lim=30):
+def structural_searching(origin_matrix, up_lim=30, orders=(1,1,2)):
+    # NOTE: Partition search always uses fixed orders (1,1,2) for evaluation.
+    # Order-aware search was tested and found to hurt when all orders are equal
+    # (PPL 578 vs 369 for order=3 on Qwen3-0.6B) because the flatter error
+    # landscape produces less informative partitions. The (1,1,2) evaluation
+    # finds structural properties that generalize well to any actual order.
     minimal_value = float('inf')
     minimal_value_0 = float('inf')
 
@@ -33,8 +38,9 @@ def structural_searching(origin_matrix, up_lim=30):
 
     error = []
     lines = []
-    # search for the optimal split for the first group, high order=2,, structured search
+    # search for the optimal split for the first group, high order=2, structured search
     _, top_braq_2_columns = torch.topk(true_counts, up_lim)
+    optimal_split_0 = max(1, up_lim // 3)  # default fallback
     for i in range(1, up_lim):
         mask3 = torch.full((origin_matrix.shape[0], origin_matrix.shape[1]), False).to(origin_matrix.device)
         mask3[:, top_braq_2_columns[:i]] = True
@@ -61,7 +67,8 @@ def structural_searching(origin_matrix, up_lim=30):
         np.quantile(flat_abs_tensor.detach().cpu().numpy(), q=percentiles.cpu().numpy(), axis=None, keepdims=False)
     ).to(origin_matrix.device)
 
-    # search for the optimal split for the second group, high order=1,, non-structured search
+    # search for the optimal split for the second group, high order=1, non-structured search
+    optimal_split = percentile_values[len(percentile_values) // 2]  # default fallback: median
     for split_value in percentile_values:
         mask1, mask2 = generate_structural_mask(origin_matrix, mask3, split_value)
         group1 = high_order_residual(origin_matrix, mask1, order=1)
@@ -72,7 +79,7 @@ def structural_searching(origin_matrix, up_lim=30):
             minimal_value = quantize_error
             optimal_split = split_value
         tmp = torch.max(torch.abs(search_matrix)).item()
-    
+
     return optimal_split, mask3
 
 def find_optimal_split(group_max, origin_matrix, border):

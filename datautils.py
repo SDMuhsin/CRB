@@ -25,7 +25,7 @@ def get_tokenizer(model_name):
         tokenizer = torch.load(tokenizer_path)
     else:
         print(f"Downloading tokenizer for {model_name}")
-        if "llama" in model_name.lower():
+        if "llama" in model_name.lower() or "danube" in model_name.lower():
             tokenizer = LlamaTokenizer.from_pretrained(model_name, use_fast=False)
             # Fix for transformer 4.28.0.dev0 compatibility
             if tokenizer.bos_token_id != 1 or tokenizer.eos_token_id != 2:
@@ -34,6 +34,16 @@ def get_tokenizer(model_name):
                     tokenizer.eos_token_id = 2
                 except AttributeError:
                     pass
+        elif "smollm" in model_name.lower():
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+        elif "pythia" in model_name.lower():
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+        elif "qwen" in model_name.lower():
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+        elif "bloom" in model_name.lower():
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+        elif "granite" in model_name.lower():
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
         else:
             tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
         
@@ -145,6 +155,49 @@ def get_c4_old(nsamples, seed, seqlen, model, tokenizer):
 
     return trainloader, valenc
 
+def get_redpajama(nsamples, seed, seqlen, model, tokenizer):
+    # RedPajama-Data-1T-Sample was removed from HuggingFace. Use C4 (same type
+    # of web crawl data) with concatenation, following GuidedQuant's approach.
+    print("RedPajama unavailable on HF; using C4 web corpus as substitute...")
+    data = load_dataset(
+        'allenai/c4',
+        data_files={'train': 'en/c4-train.00000-of-01024.json.gz'},
+        split='train',
+    )
+
+    target_tokens = nsamples * seqlen * 3
+    max_docs = min(len(data), target_tokens // 150)
+    print(f"  Tokenizing {max_docs} C4 documents...")
+    trainenc = tokenizer("\n\n".join(data['text'][:max_docs]), return_tensors='pt')
+    total_tokens = trainenc.input_ids.shape[1]
+    print(f"  {total_tokens:,} tokens from {max_docs} documents")
+
+    if total_tokens < nsamples * seqlen:
+        raise RuntimeError(
+            f"Not enough tokens: have {total_tokens:,}, need {nsamples * seqlen:,}"
+        )
+
+    random.seed(seed)
+    trainloader = []
+    selected = set()
+    while len(trainloader) < nsamples:
+        idx = random.randint(0, total_tokens - seqlen - 1)
+        if selected:
+            closest = min(selected, key=lambda x: abs(x - idx))
+            if abs(idx - closest) < seqlen:
+                continue
+        inp = trainenc.input_ids[:, idx:idx + seqlen]
+        tar = inp.clone()
+        tar[:, :-1] = -100
+        selected.add(idx)
+        trainloader.append((inp, tar))
+        if len(trainloader) % 100 == 0:
+            print(f"  Sampled {len(trainloader)}/{nsamples}")
+
+    print(f"  Done: {nsamples} non-overlapping samples of seqlen {seqlen}")
+    return trainloader, None
+
+
 def get_loaders(name, nsamples=128, seed=0, seqlen=2048, model=''):
     cache_file=f'./downloads/DOWNLOAD_{name}_{nsamples}_{seed}_{seqlen}_{model}.pt'
     try:
@@ -160,6 +213,8 @@ def get_loaders(name, nsamples=128, seed=0, seqlen=2048, model=''):
         loaders= get_ptb(nsamples, seed, seqlen, model, tokenizer)
     if 'c4' in name:
         loaders= get_c4(nsamples, seed, seqlen, model, tokenizer)
+    if 'redpajama' in name:
+        loaders= get_redpajama(nsamples, seed, seqlen, model, tokenizer)
     directory='/'.join(cache_file.split('/')[:-1])
     if not os.path.exists(directory):
         os.makedirs(directory)

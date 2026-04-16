@@ -78,8 +78,22 @@ class BRAGPTQ:
         damp = percdamp * torch.mean(torch.diag(H))
         diag = torch.arange(self.columns, device=self.dev)
         H[diag, diag] += damp
-        H = torch.linalg.cholesky(H)
-        H = torch.cholesky_inverse(H)
+        # Save raw Hessian diagonal for adaptive binarization methods
+        H_diag_raw = torch.diag(H).clone()
+        # Robust Cholesky: increase damping if needed
+        for _retry in range(10):
+            try:
+                H_chol = torch.linalg.cholesky(H)
+                break
+            except torch._C._LinAlgError:
+                extra_damp = 1e-3 * torch.mean(torch.diag(H))
+                if extra_damp == 0:
+                    extra_damp = 1e-6
+                H[diag, diag] += extra_damp
+        else:
+            # Last resort: use diagonal only
+            H_chol = torch.diag(torch.sqrt(torch.diag(H).clamp(min=1e-8)))
+        H = torch.cholesky_inverse(H_chol)
         H = torch.linalg.cholesky(H, upper=True)
         Hinv = H
 
@@ -90,10 +104,14 @@ class BRAGPTQ:
             st = col_st
             ed = col_ed
             mask = torch.zeros_like(W[:, st:ed], dtype=torch.bool).unsqueeze(0).repeat_interleave(partition, dim=0)
-            mask1, mask2, mask3 = structural_guassian_distribution(W[:, st:ed], H[st:ed, st:ed], self.salient_metric, 50)
-            mask[0] = mask1
-            mask[1] = mask2
-            mask[2] = mask3
+            if partition == 1:
+                # No structural partition — single all-ones mask (for DOML, etc.)
+                mask[0] = torch.ones_like(W[:, st:ed], dtype=torch.bool)
+            else:
+                mask1, mask2, mask3 = structural_guassian_distribution(W[:, st:ed], H[st:ed, st:ed], self.salient_metric, 50, orders=orders)
+                mask[0] = mask1
+                mask[1] = mask2
+                mask[2] = mask3
 
             assert self.braq_quantizer.groupsize % blocksize == 0
 
@@ -101,11 +119,11 @@ class BRAGPTQ:
                 # RTN
                 # print("RTN")
                 w = W[:, col_st:col_ed]
-                
+
                 # from low to high group
                 q_part_groups = []
                 for i in range(mask.shape[0]):
-                    q_part_groups.append(self.braq_quantizer.quantize(w, mask[i], order=orders[i]))
+                    q_part_groups.append(self.braq_quantizer.quantize(w, mask[i], order=orders[i], col_weights=None))
 
                 q = torch.zeros_like(w)
                 for j in range(mask.shape[0]):
@@ -121,8 +139,16 @@ class BRAGPTQ:
 
                 q_part_groups = []
 
+                # Compute column importance weights from Hessian inverse diagonal
+                # for adaptive methods that need them.
+                # 1/Hinv[j,j]^2 = GPTQ per-column loss weight (higher = more important).
+                hinv_diag = torch.diag(Hinv1)
+                col_weights = 1.0 / (hinv_diag ** 2 + 1e-12)
+                # Alternative: use raw Hessian diagonal (uncomment to test)
+                # col_weights = H_diag_raw[col_st:col_ed]
+
                 for i in range(mask.shape[0]):
-                    q_part_groups.append(self.braq_quantizer.quantize(W1, mask[i], order=orders[i]))
+                    q_part_groups.append(self.braq_quantizer.quantize(W1, mask[i], order=orders[i], col_weights=col_weights))
 
                 for i in range(n_cols):
                     # shape of w: [oc, 1]
@@ -164,7 +190,8 @@ class BRAGPTQ:
             print(torch.sum((self.layer(self.inp1) - self.out1) ** 2))
 
         del mask
-        del mask1, mask2, mask3
+        if partition > 1:
+            del mask1, mask2, mask3
         if not self.disable_gptq:
             del W1, Q1, W, Err1, Losses1, Hinv1
         del H, Hinv

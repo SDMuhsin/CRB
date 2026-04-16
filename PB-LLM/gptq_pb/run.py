@@ -1,4 +1,5 @@
 import time
+import os
 
 import torch
 import torch.nn as nn
@@ -33,6 +34,14 @@ def get_model(model_name):
             from transformers import LlamaForCausalLM
             model = LlamaForCausalLM.from_pretrained(model_name, torch_dtype="auto",cache_dir=None)
             model.seqlen = 2048
+        elif "bloom" in model_name.lower():
+            from transformers import BloomForCausalLM
+            model = BloomForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir="./downloads", attn_implementation="eager")
+            model.seqlen = 2048
+        elif "qwen" in model_name.lower():
+            from transformers import AutoModelForCausalLM
+            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir="./downloads", attn_implementation="eager")
+            model.seqlen = min(model.config.max_position_embeddings, 2048)
         else:
             raise ValueError("Unsupported model type")
         
@@ -71,23 +80,41 @@ def quant_sequential(model, dataloader, dev):
         layers = model.model.layers
         model.model.embed_tokens = model.model.embed_tokens.to(dev)
         model.model.norm = model.model.norm.to(dev)
+    elif "bloom" in args.model.lower():
+        layers = model.transformer.h
+        model.transformer.word_embeddings = model.transformer.word_embeddings.to(dev)
+        model.transformer.word_embeddings_layernorm = model.transformer.word_embeddings_layernorm.to(dev)
+    elif "qwen" in args.model.lower():
+        layers = model.model.layers
+        model.model.embed_tokens = model.model.embed_tokens.to(dev)
+        model.model.norm = model.model.norm.to(dev)
+        if hasattr(model.model, "rotary_emb"):
+            model.model.rotary_emb = model.model.rotary_emb.to(dev)
     layers[0] = layers[0].to(dev)
 
     dtype = next(iter(model.parameters())).dtype
     inps = torch.zeros(
         (args.nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=dev
     )
-    cache = {"i": 0, "attention_mask": None}
+    cache = {"i": 0, "layer_kwargs": {}}
 
     class Catcher(nn.Module):
         def __init__(self, module):
             super().__init__()
             self.module = module
 
+        def __getattr__(self, name):
+            if name == "module":
+                return super().__getattr__(name)
+            try:
+                return super().__getattr__(name)
+            except AttributeError:
+                return getattr(self.module, name)
+
         def forward(self, inp, **kwargs):
             inps[cache["i"]] = inp
             cache["i"] += 1
-            cache["attention_mask"] = kwargs["attention_mask"]
+            cache["layer_kwargs"] = kwargs
             raise ValueError
 
     layers[0] = Catcher(layers[0])
@@ -115,10 +142,21 @@ def quant_sequential(model, dataloader, dev):
     elif "huggyllama" in args.model:
         model.model.embed_tokens = model.model.embed_tokens.cpu()
         model.model.norm = model.model.norm.cpu()
+    elif "bloom" in args.model.lower():
+        model.transformer.word_embeddings = model.transformer.word_embeddings.cpu()
+        model.transformer.word_embeddings_layernorm = model.transformer.word_embeddings_layernorm.cpu()
+    elif "qwen" in args.model.lower():
+        model.model.embed_tokens = model.model.embed_tokens.cpu()
+        model.model.norm = model.model.norm.cpu()
+        if hasattr(model.model, "rotary_emb"):
+            model.model.rotary_emb = model.model.rotary_emb.cpu()
     torch.cuda.empty_cache()
 
     outs = torch.zeros_like(inps)
-    attention_mask = cache["attention_mask"]
+    layer_kwargs = cache["layer_kwargs"]
+    # Fix DynamicCache bug in transformers 5.x
+    if 'past_key_values' in layer_kwargs:
+        layer_kwargs['past_key_values'] = None
 
     print("Ready.")
     plt_x = []
@@ -163,7 +201,7 @@ def quant_sequential(model, dataloader, dev):
         for name in gpts:
             handles.append(subset[name].register_forward_hook(add_batch(name)))
         for j in range(args.nsamples):
-            outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask)[0]
+            outs[j] = layer(inps[j].unsqueeze(0), **layer_kwargs)[0]
         for h in handles:
             h.remove()
 
@@ -178,7 +216,7 @@ def quant_sequential(model, dataloader, dev):
             plt_error.append(info["error"])
 
         for j in range(args.nsamples):
-            outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask)[0]
+            outs[j] = layer(inps[j].unsqueeze(0), **layer_kwargs)[0]
 
         layers[i] = layer.cpu()
         del layer
@@ -279,6 +317,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "--log_wandb", action="store_true", help="Whether to log to wandb."
     )
+    parser.add_argument(
+        "--eval_mmlu",
+        action="store_true",
+        help="Also evaluate on MMLU (5-shot multiple choice across 57 subjects).",
+    )
+    parser.add_argument(
+        "--eval_hellaswag",
+        action="store_true",
+        help="Also evaluate on HellaSwag (commonsense sentence completion).",
+    )
+    parser.add_argument(
+        "--eval_arc",
+        action="store_true",
+        help="Also evaluate on ARC (AI2 Reasoning Challenge, Easy + Challenge).",
+    )
 
     args = parser.parse_args()
 
@@ -306,6 +359,7 @@ if __name__ == "__main__":
                 break
         print(time.time() - tick)
 
+    ppl = None
     for dataset in [args.dataset]:
         # for dataset in ['c4']:
         # for dataset in ['wikitext2']:
@@ -316,11 +370,70 @@ if __name__ == "__main__":
         if "opt" in args.model:
             from eval_ppl_utils import opt_eval
 
-            opt_eval(model, testloader, device, dataset, args.log_wandb,save_title=save_title)
+            ppl = opt_eval(model, testloader, device, dataset, args.log_wandb,save_title=save_title)
         elif "huggyllama" in args.model:
             from eval_ppl_utils import llama_eval
 
-            llama_eval(model, testloader, device, dataset, args.log_wandb,save_title=save_title)
+            ppl = llama_eval(model, testloader, device, dataset, args.log_wandb,save_title=save_title)
+        elif "bloom" in args.model.lower():
+            import sys
+            sys.path.insert(0, "/workspace/BiLLM2")
+            from eval_ppl_utils import bloom_eval
+            ppl = bloom_eval(model, testloader, device, dataset, args.log_wandb, save_title=save_title)
+        elif "qwen" in args.model.lower():
+            import sys
+            sys.path.insert(0, "/workspace/BiLLM2")
+            from eval_ppl_utils import qwen_eval
+            ppl = qwen_eval(model, testloader, device, dataset, args.log_wandb, save_title=save_title)
+
+        # CSV output
+        if ppl is not None:
+            sys.path.insert(0, "/workspace/BiLLM2/src")
+            from csv_utils import append_result as _csv_append
+            _csv_append(
+                model=args.model, method="pbllm", dataset=dataset,
+                metric="perplexity", value=ppl,
+                bpw="", seed=args.seed, blocksize=args.blocksize,
+                salient_metric=args.salient_metric,
+                extra_params={"low_frac": args.low_frac, "high_bit": args.high_bit,
+                              "low_quant_method": args.low_quant_method},
+                quantization_time_s="",
+            )
+
+    # CSV helper for downstream evals
+    import sys
+    sys.path.insert(0, "/workspace/BiLLM2/src")
+    sys.path.insert(0, "/workspace/BiLLM2")
+    from csv_utils import append_result as _csv_append
+    def _pb_csv(metric, value):
+        _csv_append(
+            model=args.model, method="pbllm", dataset=args.dataset,
+            metric=metric, value=value,
+            bpw="", seed=args.seed, blocksize=args.blocksize,
+            salient_metric=args.salient_metric,
+            extra_params={"low_frac": args.low_frac, "high_bit": args.high_bit,
+                          "low_quant_method": args.low_quant_method},
+        )
+
+    # Model-agnostic benchmarks
+    if args.eval_mmlu:
+        from eval_mmlu import eval_mmlu
+        mmlu_title = f"{save_title}_MMLU"
+        mmlu_acc = eval_mmlu(model, args.model, device, save_title=mmlu_title)
+        _pb_csv("mmlu_acc", mmlu_acc)
+
+    if args.eval_hellaswag:
+        from eval_hellaswag import eval_hellaswag
+        hellaswag_title = f"{save_title}_HELLASWAG"
+        hellaswag_acc = eval_hellaswag(model, args.model, device, save_title=hellaswag_title)
+        _pb_csv("hellaswag_acc", hellaswag_acc)
+
+    if args.eval_arc:
+        from eval_arc import eval_arc
+        arc_title = f"{save_title}_ARC"
+        arc_results = eval_arc(model, args.model, device, save_title=arc_title)
+        _pb_csv("arc_easy_acc", arc_results["ARC-Easy"]["accuracy"])
+        _pb_csv("arc_challenge_acc", arc_results["ARC-Challenge"]["accuracy"])
 
     if args.save:
         save_path = os.path.dirname(save_file)

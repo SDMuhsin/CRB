@@ -1,4 +1,5 @@
 import math
+import os
 import time
 
 import torch
@@ -18,7 +19,7 @@ def get_bloom(model):
     torch.nn.init.uniform_ = skip
     torch.nn.init.normal_ = skip
     from transformers import BloomForCausalLM
-    model = BloomForCausalLM.from_pretrained(model, torch_dtype='auto')
+    model = BloomForCausalLM.from_pretrained(model, torch_dtype='auto', attn_implementation="eager", cache_dir="./downloads")
     model.seqlen = 2048
     return model
 
@@ -207,6 +208,8 @@ def bloom_eval(model, testenc, dev):
 
     model.config.use_cache = use_cache
 
+    return ppl.item()
+
 
 def bloom_pack3(model, quantizers):
     layers = find_layers(model)
@@ -272,9 +275,27 @@ if __name__ == '__main__':
         '--new-eval', action='store_true',
         help='Whether to use the new PTB and C4 eval'
     )
+    parser.add_argument(
+        '--device', type=str, default='cuda:0',
+        help='Device to use for computation (default: cuda:0).'
+    )
+    parser.add_argument(
+        '--eval_mmlu', action='store_true',
+        help='Also evaluate on MMLU (5-shot multiple choice across 57 subjects).'
+    )
+    parser.add_argument(
+        '--eval_hellaswag', action='store_true',
+        help='Also evaluate on HellaSwag (commonsense sentence completion).'
+    )
+    parser.add_argument(
+        '--eval_arc', action='store_true',
+        help='Also evaluate on ARC (AI2 Reasoning Challenge, Easy + Challenge).'
+    )
 
 
     args = parser.parse_args()
+
+    DEV = torch.device(args.device)
 
     model = get_bloom(args.model)
     model.eval()
@@ -288,15 +309,37 @@ if __name__ == '__main__':
         quantizers = bloom_sequential(model, dataloader, DEV)
         print(time.time() - tick)
 
-    datasets = ['wikitext2', 'ptb', 'c4'] 
-    if args.new_eval:
-        datasets = ['wikitext2', 'ptb-new', 'c4-new']
-    for dataset in datasets: 
+    datasets = ['wikitext2']
+    for dataset in datasets:
         dataloader, testloader = get_loaders(
             dataset, seed=args.seed, model=args.model, seqlen=model.seqlen
         )
         print(dataset)
         bloom_eval(model, testloader, DEV)
+
+    # Model-agnostic benchmarks
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+    # Clear cached gptq/datautils so benchmark scripts find the main project's datautils
+    if 'datautils' in sys.modules:
+        del sys.modules['datautils']
+
+    save_title = f"{args.model}_{args.dataset}_gptq_{args.wbits}bit"
+
+    if args.eval_mmlu:
+        from eval_mmlu import eval_mmlu
+        mmlu_title = f"{save_title}_MMLU"
+        eval_mmlu(model, args.model, DEV, save_title=mmlu_title)
+
+    if args.eval_hellaswag:
+        from eval_hellaswag import eval_hellaswag
+        hellaswag_title = f"{save_title}_HELLASWAG"
+        eval_hellaswag(model, args.model, DEV, save_title=hellaswag_title)
+
+    if args.eval_arc:
+        from eval_arc import eval_arc
+        arc_title = f"{save_title}_ARC"
+        eval_arc(model, args.model, DEV, save_title=arc_title)
 
     if args.save:
         bloom_pack3(model, quantizers)

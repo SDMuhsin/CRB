@@ -8,3 +8,16 @@ downloads
 **output**
 ./src/plot_**
 
+
+# LaTeX build artifacts
+crb_architecture.pdf
+crb_architecture.aux
+crb_architecture.log
+crb_architecture.tex
+
+# IDE files
+llmdocs
+test*
+*.bib
+*.tex
+results

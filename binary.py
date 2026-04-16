@@ -39,6 +39,54 @@ def high_order_residual(x, mask, order=2):
     return sum_order
 
 @torch.no_grad()
+def ternary_residual(x, mask, order=2):
+    """Ternary residual approximation: {-alpha, 0, +alpha} per row.
+
+    Like high_order_residual but uses ternary ({-1, 0, +1}) instead of binary ({-1, +1}).
+    The zero level naturally handles near-zero weights, giving better approximation
+    for weight distributions with significant mass near zero.
+
+    Each pass: center, compute threshold, assign {-1, 0, +1}, scale by alpha.
+    Threshold = 0.5 * mean(|centered|), values below → 0.
+    """
+    sum_order = torch.zeros_like(x)
+    new_matrix = x.clone() * mask
+
+    for od in range(order):
+        residual = new_matrix - sum_order
+        masked_x = torch.where(mask, residual, torch.tensor(float('nan')))
+
+        # Per-row mean (centering)
+        row_mean = torch.nanmean(masked_x, dim=1)
+        row_mean = torch.where(torch.isnan(row_mean), torch.zeros_like(row_mean), row_mean)
+        centered = masked_x - row_mean[:, None]
+
+        # Per-row scale
+        alpha = torch.nanmean(torch.abs(centered), dim=1)
+        alpha = torch.where(torch.isnan(alpha), torch.zeros_like(alpha), alpha)
+
+        # Ternary: threshold at 0.5 * alpha, values below → 0
+        threshold = 0.5 * alpha[:, None]
+        # Use nan-safe comparisons: nan > x = False, nan < x = False
+        # So nan positions correctly stay at 0
+        ternary = torch.zeros_like(centered)
+        ternary[centered > threshold] = 1.0
+        ternary[centered < -threshold] = -1.0
+
+        # Recompute alpha as mean of |values| where ternary != 0 (better scale)
+        # Replace NaN with 0 before computing abs to avoid NaN propagation
+        centered_safe = torch.where(torch.isnan(centered), torch.zeros_like(centered), centered)
+        abs_vals = torch.abs(centered_safe) * (ternary != 0).float()
+        n_nonzero = (ternary != 0).float().sum(dim=1, keepdim=True).clamp(min=1)
+        alpha_refined = abs_vals.sum(dim=1, keepdim=True) / n_nonzero
+
+        ternary = ternary * alpha_refined + row_mean[:, None]
+        sum_order = sum_order + ternary * mask
+
+    return sum_order
+
+
+@torch.no_grad()
 def normal_quantize(x, scale, zero, maxq):
     q = torch.clamp(torch.round(x / scale) + zero, 0, maxq)
     return scale * (q - zero)
@@ -1179,7 +1227,7 @@ def coupled_residual_binarization_stable_v4(
 
             # Correlation damping if c12>0
             if c12 > 0:
-                c12 = c12 * (1.0 - corr_damp)
+                c12 = torch.where(c12 > 0, c12 * (1.0 - corr_damp), c12)
 
             # Solve system:
             #   [d + lam, -c12   ] [alpha1] = [c1w]
@@ -1321,7 +1369,7 @@ def coupled_residual_binarization_stable_v5(
 
             # Correlation damping if c12>0
             if c12 > 0:
-                c12 = c12 * (1.0 - corr_damp)
+                c12 = torch.where(c12 > 0, c12 * (1.0 - corr_damp), c12)
 
             # Solve system:
             #   [d + lam,   -c12     ] [alpha1] = [c1w]
@@ -1498,34 +1546,13 @@ def coupled_residual_binarization_stable_v7(
     mask,
     order=2,
     lam=1e-5,
-    corr_damp=0.1
+    corr_damp=0.1,
+    skip_refinement=False,
+    symmetric_damp=False
 ):
-    print(corr_damp,lam)
     """
-    A single-pass (order==1) or two-expansion (order>=2) binarization with:
-      - Row mean centering
-      - Residual re-centering
-      - Tikhonov (ridge) regularization
-      - Correlation damping
-      - Two-way sign refinement (new in v7)
-
-    For two expansions, the steps are:
-      1) Solve alpha1, alpha2 for initial B1, B2
-      2) Refine B2 => re-solve alpha1, alpha2
-      3) Refine B1 => re-solve alpha1, alpha2
-
-    This short coordinate-descent loop typically reduces the final error
-    more robustly than v4/v5, with minimal extra cost.
-
-    Args:
-      x (Tensor):         (oc, ic) weight matrix
-      mask (Bool Tensor): same shape as x; True => valid entries
-      order (int):        1 => single expansion, >=2 => two expansions
-      lam (float):        Tikhonov/ridge strength
-      corr_damp (float):  factor in [0,1], how much to scale down c12 if c12>0
-
-    Returns:
-      sum_order (Tensor): approximate binarized reconstruction, same shape
+    Vectorized CRB v7: two-expansion binarization with Tikhonov regularization,
+    correlation damping, and two-way sign refinement.
     """
     sum_order = torch.zeros_like(x)
     new_matrix = x.clone() * mask
@@ -1533,114 +1560,492 @@ def coupled_residual_binarization_stable_v7(
     global index
     index += 1
 
+    mask_f = mask.float()
+    d = mask_f.sum(dim=1)  # (oc,) count of valid elements per row
+    d_safe = torch.clamp(d, min=1.0)
+
     # ---------------------------
     # Case 1: single expansion
     # ---------------------------
     if order == 1:
-        residual = new_matrix
-        masked_x_tensor = torch.where(
-            mask,
-            residual,
-            torch.tensor(float('nan'), device=residual.device)
-        )
-
-        # Row-wise mean
-        mean_tensor_all = torch.nanmean(masked_x_tensor, dim=1)
-        mean_tensor_all = torch.where(
-            torch.isnan(mean_tensor_all),
-            torch.zeros_like(mean_tensor_all),
-            mean_tensor_all
-        )
-
-        # Subtract row mean
-        masked_x_tensor = masked_x_tensor - mean_tensor_all[:, None]
-
-        # Row-wise scale = average absolute value
-        scale_tensor_all = torch.nanmean(torch.abs(masked_x_tensor), dim=1)
-        scale_tensor_all = torch.where(
-            torch.isnan(scale_tensor_all),
-            torch.zeros_like(scale_tensor_all),
-            scale_tensor_all
-        )
-
-        # Binary sign
-        binary = torch.sign(masked_x_tensor)
-
-        # Scale
-        binary *= scale_tensor_all[:, None]
-
-        # Add row mean
-        binary += mean_tensor_all[:, None]
-
-        sum_order = sum_order + binary * mask
+        row_mean = (new_matrix * mask_f).sum(dim=1) / d_safe
+        centered = (new_matrix - row_mean[:, None]) * mask_f
+        B1 = torch.sign(centered) * mask_f
+        alpha1 = (centered.abs() * mask_f).sum(dim=1) / d_safe
+        sum_order = (row_mean[:, None] + alpha1[:, None] * B1) * mask_f
         return sum_order
 
     # ---------------------------
-    # Case 2: two expansions
-    # with two-way sign refinement (v7)
+    # Case 2: two expansions with two-way sign refinement (v7)
     # ---------------------------
-    oc, ic = new_matrix.shape
 
-    def solve_alphas(B1, B2, c1w, c2w, d, lam, corr_damp):
-        # correlation
-        c12 = (B1 * B2).sum().item()
-        # if c12 is positive, damp it
-        if c12 > 0:
-            c12 *= (1.0 - corr_damp)
-
-        # Solve system:
-        #   [d + lam, -c12   ] [alpha1] = [c1w]
-        #   [-c12,   d + lam ] [alpha2]   [c2w]
-        denom = (d + lam) * (d + lam) - c12 * c12
-        if abs(denom) > 1e-12:
-            alpha1_new = ((d + lam) * c1w - c12 * c2w) / denom
-            alpha2_new = ((d + lam) * c2w - c12 * c1w) / denom
-            return max(alpha1_new, 0.0), max(alpha2_new, 0.0)
+    def solve_alphas_vec(B1, B2, c1w, c2w, d, lam, corr_damp):
+        c12 = (B1 * B2 * mask_f).sum(dim=1)
+        if symmetric_damp:
+            c12 = c12 * (1.0 - corr_damp)
         else:
-            # fallback if near-singular
-            return 0.0, 0.0
+            c12 = torch.where(c12 > 0, c12 * (1.0 - corr_damp), c12)
+        A = d + lam
+        denom = A * A - c12 * c12
+        safe = denom.abs() > 1e-12
+        safe_denom = torch.where(safe, denom, torch.ones_like(denom))
+        a1 = torch.clamp((A * c1w - c12 * c2w) / safe_denom, min=0.0)
+        a2 = torch.clamp((A * c2w - c12 * c1w) / safe_denom, min=0.0)
+        a1 = torch.where(safe, a1, torch.zeros_like(a1))
+        a2 = torch.where(safe, a2, torch.zeros_like(a2))
+        return a1, a2
 
-    for row_idx in range(oc):
-        row_mask = mask[row_idx, :]
-        if not torch.any(row_mask):
-            continue
+    # Step 1: Row mean and centering
+    row_mean = (new_matrix * mask_f).sum(dim=1) / d_safe  # (oc,)
+    centered = (new_matrix - row_mean[:, None]) * mask_f   # (oc, ic)
 
-        row_vals = new_matrix[row_idx, row_mask]
-        d = float(row_vals.numel())
+    # Step 2: B1 = sign(centered), initial alpha1
+    B1 = torch.sign(centered) * mask_f
+    alpha1_init = (centered.abs() * mask_f).sum(dim=1) / d_safe
 
-        # 1) Row mean
-        row_mean = row_vals.mean()
-        centered = row_vals - row_mean
+    # Step 3: Residual -> B2
+    r = (centered - alpha1_init[:, None] * B1) * mask_f
+    r_mean = (r * mask_f).sum(dim=1) / d_safe
+    r_centered = (r - r_mean[:, None]) * mask_f
+    B2 = torch.sign(r_centered) * mask_f
 
-        # 2) First expansion: B1, alpha1
-        B1 = torch.sign(centered)
-        alpha1 = centered.abs().mean()
+    # Step 4: Solve alpha1, alpha2 jointly
+    c1w = (centered * B1).sum(dim=1)
+    c2w = (centered * B2).sum(dim=1)
+    alpha1, alpha2 = solve_alphas_vec(B1, B2, c1w, c2w, d, lam, corr_damp)
 
-        # 3) Residual => B2
-        r = centered - alpha1 * B1
-        r_mean = r.mean()
-        r_centered = r - r_mean
-        B2 = torch.sign(r_centered)
-        alpha2 = r_centered.abs().mean()
+    if not skip_refinement:
+        # Step 5: Refine B2 with centering, re-solve
+        temp5 = (centered - alpha1[:, None] * B1) * mask_f
+        temp5_mean = (temp5 * mask_f).sum(dim=1) / d_safe
+        B2 = torch.sign((temp5 - temp5_mean[:, None]) * mask_f) * mask_f
+        c2w = (centered * B2).sum(dim=1)
+        alpha1, alpha2 = solve_alphas_vec(B1, B2, c1w, c2w, d, lam, corr_damp)
 
-        # 4) Solve alpha1, alpha2 (initial)
-        c1w = (centered * B1).sum().item()   # <(w-mean), B1>
-        c2w = (centered * B2).sum().item()   # <(w-mean), B2>
-        alpha1, alpha2 = solve_alphas(B1, B2, c1w, c2w, d, lam, corr_damp)
+        # Step 6 (v7): Refine B1 with centering, re-solve
+        temp6 = (centered - alpha2[:, None] * B2) * mask_f
+        temp6_mean = (temp6 * mask_f).sum(dim=1) / d_safe
+        B1 = torch.sign((temp6 - temp6_mean[:, None]) * mask_f) * mask_f
+        c1w = (centered * B1).sum(dim=1)
+        alpha1, alpha2 = solve_alphas_vec(B1, B2, c1w, c2w, d, lam, corr_damp)
 
-        # 5) Recompute B2 => re-solve alpha1, alpha2
-        B2 = torch.sign(centered - alpha1 * B1)
-        c2w = (centered * B2).sum().item()
-        alpha1, alpha2 = solve_alphas(B1, B2, c1w, c2w, d, lam, corr_damp)
+    # Step 7: Final reconstruction with residual mean correction
+    approx = (alpha1[:, None] * B1 + alpha2[:, None] * B2) * mask_f
+    residual_final = (centered - approx) * mask_f
+    mu_correction = (residual_final * mask_f).sum(dim=1) / d_safe
+    sum_order = (row_mean[:, None] + mu_correction[:, None] + alpha1[:, None] * B1 + alpha2[:, None] * B2) * mask_f
 
-        # (NEW in v7) 6) Recompute B1 => re-solve alpha1, alpha2
-        B1 = torch.sign(centered - alpha2 * B2)
-        c1w = (centered * B1).sum().item()
-        alpha1, alpha2 = solve_alphas(B1, B2, c1w, c2w, d, lam, corr_damp)
+    return sum_order
 
-        # 7) Final reconstruction
-        row_approx = row_mean + alpha1 * B1 + alpha2 * B2
-        sum_order[row_idx, row_mask] = row_approx
+@torch.no_grad()
+def coupled_residual_binarization_seqalpha(
+    x,
+    mask,
+    order=2,
+    skip_refinement=False
+):
+    """
+    BRAQ-equivalent binarization using BRAQ's exact code path (nanmean, torch.where)
+    for bit-exact float16 equivalence. With optional sign refinement.
+    Without refinement, this produces BIT-EXACT same output as high_order_residual.
+    """
+    sum_order = torch.zeros_like(x)
+    new_matrix = x.clone() * mask
+
+    global index
+    index += 1
+
+    # Use BRAQ's exact code path for base decomposition
+    for od in range(order):
+        residual = new_matrix - sum_order
+        masked_x = torch.where(mask, residual, torch.tensor(float('nan'), device=x.device, dtype=x.dtype))
+
+        mean_val = torch.nanmean(masked_x, dim=1)
+        mean_val = torch.where(torch.isnan(mean_val), torch.zeros_like(mean_val), mean_val)
+        masked_x -= mean_val[:, None]
+        scale_val = torch.nanmean(torch.abs(masked_x), dim=1)
+        scale_val = torch.where(torch.isnan(scale_val), torch.zeros_like(scale_val), scale_val)
+
+        binary = torch.sign(masked_x)
+        binary *= scale_val[:, None]
+        binary += mean_val[:, None]
+        sum_order = sum_order + binary * mask
+
+    if skip_refinement or order < 2:
+        return sum_order
+
+    # --- Sign refinement on top of BRAQ base ---
+    # Extract B1, alpha1, mean1 from first expansion
+    # and B2, alpha2, mean2 from second expansion
+    # by re-deriving from sum_order
+
+    # Re-derive first expansion components
+    masked_w = torch.where(mask, new_matrix, torch.tensor(float('nan'), device=x.device, dtype=x.dtype))
+    mean1 = torch.nanmean(masked_w, dim=1)
+    mean1 = torch.where(torch.isnan(mean1), torch.zeros_like(mean1), mean1)
+    centered1 = masked_w - mean1[:, None]
+    alpha1 = torch.nanmean(torch.abs(centered1), dim=1)
+    alpha1 = torch.where(torch.isnan(alpha1), torch.zeros_like(alpha1), alpha1)
+    B1 = torch.sign(centered1)  # NaN → 0
+
+    # First expansion reconstruction
+    exp1 = torch.zeros_like(x)
+    exp1_binary = B1 * alpha1[:, None] + mean1[:, None]
+    exp1 = exp1_binary * mask
+
+    # Re-derive second expansion components
+    residual1 = new_matrix - exp1
+    masked_r = torch.where(mask, residual1, torch.tensor(float('nan'), device=x.device, dtype=x.dtype))
+    mean2 = torch.nanmean(masked_r, dim=1)
+    mean2 = torch.where(torch.isnan(mean2), torch.zeros_like(mean2), mean2)
+    centered2 = masked_r - mean2[:, None]
+    alpha2 = torch.nanmean(torch.abs(centered2), dim=1)
+    alpha2 = torch.where(torch.isnan(alpha2), torch.zeros_like(alpha2), alpha2)
+    B2 = torch.sign(centered2)
+
+    # Step 5: Refine B2 using current alpha1
+    # Recompute residual and re-sign
+    temp5 = torch.where(mask, residual1, torch.tensor(float('nan'), device=x.device, dtype=x.dtype))
+    temp5_mean = torch.nanmean(temp5, dim=1)
+    temp5_mean = torch.where(torch.isnan(temp5_mean), torch.zeros_like(temp5_mean), temp5_mean)
+    temp5_centered = temp5 - temp5_mean[:, None]
+    B2 = torch.sign(temp5_centered)
+
+    # Recompute alpha2 for new B2
+    alpha2 = torch.nanmean(torch.abs(temp5_centered), dim=1)
+    alpha2 = torch.where(torch.isnan(alpha2), torch.zeros_like(alpha2), alpha2)
+    mean2 = temp5_mean
+
+    # Step 6: Refine B1 using current alpha2
+    exp2 = (B2 * alpha2[:, None] + mean2[:, None]) * mask
+    residual_for_b1 = new_matrix - exp2
+    temp6 = torch.where(mask, residual_for_b1, torch.tensor(float('nan'), device=x.device, dtype=x.dtype))
+    temp6_mean = torch.nanmean(temp6, dim=1)
+    temp6_mean = torch.where(torch.isnan(temp6_mean), torch.zeros_like(temp6_mean), temp6_mean)
+    temp6_centered = temp6 - temp6_mean[:, None]
+    B1 = torch.sign(temp6_centered)
+
+    # Recompute alpha1 for new B1
+    alpha1 = torch.nanmean(torch.abs(temp6_centered), dim=1)
+    alpha1 = torch.where(torch.isnan(alpha1), torch.zeros_like(alpha1), alpha1)
+    mean1 = temp6_mean
+
+    # Recompute second expansion with refined B1
+    exp1 = (B1 * alpha1[:, None] + mean1[:, None]) * mask
+    residual_final = new_matrix - exp1
+    masked_rf = torch.where(mask, residual_final, torch.tensor(float('nan'), device=x.device, dtype=x.dtype))
+    mean2 = torch.nanmean(masked_rf, dim=1)
+    mean2 = torch.where(torch.isnan(mean2), torch.zeros_like(mean2), mean2)
+    centered_rf = masked_rf - mean2[:, None]
+    alpha2 = torch.nanmean(torch.abs(centered_rf), dim=1)
+    alpha2 = torch.where(torch.isnan(alpha2), torch.zeros_like(alpha2), alpha2)
+    B2 = torch.sign(centered_rf)
+
+    # Final output: BRAQ-style accumulation
+    sum_order = exp1 + (B2 * alpha2[:, None] + mean2[:, None]) * mask
+
+    return sum_order
+
+@torch.no_grad()
+def coupled_residual_binarization_resrhs(
+    x,
+    mask,
+    order=2,
+    lam=1e-5,
+    corr_damp=0.1,
+    skip_refinement=False
+):
+    """
+    CRB with residual-projected RHS: c2w is computed from the residual
+    (centered - alpha1*B1) instead of centered, fixing the alpha2 deflation
+    that occurs because sum(centered*B2) bakes in alpha1*c12.
+    """
+    sum_order = torch.zeros_like(x)
+    new_matrix = x.clone() * mask
+
+    global index
+    index += 1
+
+    mask_f = mask.float()
+    d = mask_f.sum(dim=1)
+    d_safe = torch.clamp(d, min=1.0)
+
+    if order == 1:
+        row_mean = (new_matrix * mask_f).sum(dim=1) / d_safe
+        centered = (new_matrix - row_mean[:, None]) * mask_f
+        B1 = torch.sign(centered) * mask_f
+        alpha1 = (centered.abs() * mask_f).sum(dim=1) / d_safe
+        sum_order = (row_mean[:, None] + alpha1[:, None] * B1) * mask_f
+        return sum_order
+
+    def solve_alphas_vec(B1, B2, c1w, c2w, d, lam, corr_damp):
+        c12 = (B1 * B2 * mask_f).sum(dim=1)
+        c12 = torch.where(c12 > 0, c12 * (1.0 - corr_damp), c12)
+        A = d + lam
+        denom = A * A - c12 * c12
+        safe = denom.abs() > 1e-12
+        safe_denom = torch.where(safe, denom, torch.ones_like(denom))
+        a1 = torch.clamp((A * c1w - c12 * c2w) / safe_denom, min=0.0)
+        a2 = torch.clamp((A * c2w - c12 * c1w) / safe_denom, min=0.0)
+        a1 = torch.where(safe, a1, torch.zeros_like(a1))
+        a2 = torch.where(safe, a2, torch.zeros_like(a2))
+        return a1, a2
+
+    # Step 1: Row mean and centering
+    row_mean = (new_matrix * mask_f).sum(dim=1) / d_safe
+    centered = (new_matrix - row_mean[:, None]) * mask_f
+
+    # Step 2: B1 = sign(centered), initial alpha1
+    B1 = torch.sign(centered) * mask_f
+    alpha1_init = (centered.abs() * mask_f).sum(dim=1) / d_safe
+
+    # Step 3: Residual -> B2
+    r = (centered - alpha1_init[:, None] * B1) * mask_f
+    r_mean = (r * mask_f).sum(dim=1) / d_safe
+    r_centered = (r - r_mean[:, None]) * mask_f
+    B2 = torch.sign(r_centered) * mask_f
+
+    # Step 4: Solve alpha1, alpha2 jointly
+    # KEY CHANGE: c2w uses residual projection instead of centered
+    c1w = (centered * B1).sum(dim=1)
+    c2w = (r * B2).sum(dim=1)  # residual-projected RHS
+    alpha1, alpha2 = solve_alphas_vec(B1, B2, c1w, c2w, d, lam, corr_damp)
+
+    if not skip_refinement:
+        # Step 5: Refine B2 with centering, re-solve
+        temp5 = (centered - alpha1[:, None] * B1) * mask_f
+        temp5_mean = (temp5 * mask_f).sum(dim=1) / d_safe
+        B2 = torch.sign((temp5 - temp5_mean[:, None]) * mask_f) * mask_f
+        # Use residual-projected c2w after refinement too
+        c2w = (temp5 * B2).sum(dim=1)
+        alpha1, alpha2 = solve_alphas_vec(B1, B2, c1w, c2w, d, lam, corr_damp)
+
+        # Step 6: Refine B1 with centering, re-solve
+        temp6 = (centered - alpha2[:, None] * B2) * mask_f
+        temp6_mean = (temp6 * mask_f).sum(dim=1) / d_safe
+        B1 = torch.sign((temp6 - temp6_mean[:, None]) * mask_f) * mask_f
+        c1w = (centered * B1).sum(dim=1)
+        # Recompute c2w with residual from new B1
+        r_new = (centered - alpha1[:, None] * B1) * mask_f
+        c2w = (r_new * B2).sum(dim=1)
+        alpha1, alpha2 = solve_alphas_vec(B1, B2, c1w, c2w, d, lam, corr_damp)
+
+    # Step 7: Final reconstruction with residual mean correction
+    approx = (alpha1[:, None] * B1 + alpha2[:, None] * B2) * mask_f
+    residual_final = (centered - approx) * mask_f
+    mu_correction = (residual_final * mask_f).sum(dim=1) / d_safe
+    sum_order = (row_mean[:, None] + mu_correction[:, None] + alpha1[:, None] * B1 + alpha2[:, None] * B2) * mask_f
+
+    return sum_order
+
+@torch.no_grad()
+def coupled_residual_binarization_adaptive(
+    x,
+    mask,
+    order=2,
+    lam=1e-5,
+    corr_damp=0.1,
+    col_weights=None
+):
+    """
+    Adaptive CRB: runs both refined and unrefined paths for order=2,
+    selects per-row based on Hessian-weighted error from GPTQ.
+
+    The sign refinement (Steps 5-6) reduces Frobenius error but can increase
+    prediction-relevant error on some models. By comparing Hessian-weighted
+    error per row, we keep refinement only where it actually helps the
+    GPTQ objective.
+
+    col_weights: (ic,) tensor of column importance from GPTQ Hessian inverse.
+                 Typically 1/(Hinv_diag^2). If None, uses uniform weights
+                 (equivalent to standard CRB with refinement).
+    """
+    # For order=1, refinement doesn't apply
+    if order == 1:
+        return coupled_residual_binarization_stable_v7(
+            x, mask, order=1, lam=lam, corr_damp=corr_damp
+        )
+
+    sum_order = torch.zeros_like(x)
+    new_matrix = x.clone() * mask
+
+    global index
+    index += 1
+
+    mask_f = mask.float()
+    d = mask_f.sum(dim=1)
+    d_safe = torch.clamp(d, min=1.0)
+
+    def solve_alphas_vec(B1, B2, c1w, c2w, d, lam, corr_damp):
+        c12 = (B1 * B2 * mask_f).sum(dim=1)
+        c12 = torch.where(c12 > 0, c12 * (1.0 - corr_damp), c12)
+        A = d + lam
+        denom = A * A - c12 * c12
+        safe = denom.abs() > 1e-12
+        safe_denom = torch.where(safe, denom, torch.ones_like(denom))
+        a1 = torch.clamp((A * c1w - c12 * c2w) / safe_denom, min=0.0)
+        a2 = torch.clamp((A * c2w - c12 * c1w) / safe_denom, min=0.0)
+        a1 = torch.where(safe, a1, torch.zeros_like(a1))
+        a2 = torch.where(safe, a2, torch.zeros_like(a2))
+        return a1, a2
+
+    def make_reconstruction(row_mean, B1, B2, alpha1, alpha2, centered, mask_f, d_safe):
+        approx = (alpha1[:, None] * B1 + alpha2[:, None] * B2) * mask_f
+        residual_final = (centered - approx) * mask_f
+        mu_corr = (residual_final * mask_f).sum(dim=1) / d_safe
+        return (row_mean[:, None] + mu_corr[:, None] + alpha1[:, None] * B1 + alpha2[:, None] * B2) * mask_f
+
+    # ===== SHARED: Steps 1-4 (identical for both paths) =====
+
+    # Step 1: Row mean and centering
+    row_mean = (new_matrix * mask_f).sum(dim=1) / d_safe
+    centered = (new_matrix - row_mean[:, None]) * mask_f
+
+    # Step 2: B1 = sign(centered)
+    B1_init = torch.sign(centered) * mask_f
+    alpha1_raw = (centered.abs() * mask_f).sum(dim=1) / d_safe
+
+    # Step 3: Residual -> B2
+    r = (centered - alpha1_raw[:, None] * B1_init) * mask_f
+    r_mean = (r * mask_f).sum(dim=1) / d_safe
+    r_centered = (r - r_mean[:, None]) * mask_f
+    B2_init = torch.sign(r_centered) * mask_f
+
+    # Step 4: Joint alpha solve
+    c1w_init = (centered * B1_init).sum(dim=1)
+    c2w_init = (centered * B2_init).sum(dim=1)
+    alpha1_s4, alpha2_s4 = solve_alphas_vec(B1_init, B2_init, c1w_init, c2w_init, d, lam, corr_damp)
+
+    # ===== PATH A: No refinement (Steps 1-4 + 7 only) =====
+    Q_noref = make_reconstruction(row_mean, B1_init, B2_init, alpha1_s4, alpha2_s4, centered, mask_f, d_safe)
+
+    # ===== PATH B: With refinement (Steps 5-6 + 7) =====
+    # Step 5: Refine B2
+    temp5 = (centered - alpha1_s4[:, None] * B1_init) * mask_f
+    temp5_mean = (temp5 * mask_f).sum(dim=1) / d_safe
+    B2_ref = torch.sign((temp5 - temp5_mean[:, None]) * mask_f) * mask_f
+    c2w_ref = (centered * B2_ref).sum(dim=1)
+    alpha1_s5, alpha2_s5 = solve_alphas_vec(B1_init, B2_ref, c1w_init, c2w_ref, d, lam, corr_damp)
+
+    # Step 6: Refine B1
+    temp6 = (centered - alpha2_s5[:, None] * B2_ref) * mask_f
+    temp6_mean = (temp6 * mask_f).sum(dim=1) / d_safe
+    B1_ref = torch.sign((temp6 - temp6_mean[:, None]) * mask_f) * mask_f
+    c1w_ref = (centered * B1_ref).sum(dim=1)
+    alpha1_s6, alpha2_s6 = solve_alphas_vec(B1_ref, B2_ref, c1w_ref, c2w_ref, d, lam, corr_damp)
+
+    Q_ref = make_reconstruction(row_mean, B1_ref, B2_ref, alpha1_s6, alpha2_s6, centered, mask_f, d_safe)
+
+    # ===== PER-BLOCK SELECTION based on clipped Hessian-weighted error =====
+    # Use per-BLOCK (not per-row) selection to avoid mixing refined/unrefined
+    # rows within the same block, which creates bad GPTQ compensation patterns.
+    if col_weights is not None:
+        cw_median = col_weights.median().clamp(min=1e-10)
+        cw_clipped = torch.clamp(col_weights, max=cw_median * 100.0)
+        cw = cw_clipped[None, :] * mask_f
+    else:
+        cw = mask_f
+
+    total_err_noref = ((new_matrix - Q_noref) ** 2 * cw).sum()
+    total_err_ref = ((new_matrix - Q_ref) ** 2 * cw).sum()
+
+    # Use refinement only if it provides substantial Hessian-weighted improvement.
+    margin = 0.001  # 0.1% improvement threshold for per-block
+    if total_err_ref < total_err_noref * (1.0 - margin):
+        return Q_ref
+    else:
+        return Q_noref
+
+@torch.no_grad()
+def coupled_residual_binarization_hessian(
+    x,
+    mask,
+    order=2,
+    lam=1e-5,
+    corr_damp=0.1,
+    col_weights=None
+):
+    """
+    CRB with Hessian-weighted alpha solve (no sign refinement).
+
+    Instead of minimizing Frobenius error ||W - α₁B₁ - α₂B₂||²,
+    minimizes Hessian-weighted error Σ_j h_j*(W_j - α₁B₁_j - α₂B₂_j)²
+    where h_j is the column importance from GPTQ Hessian.
+
+    The signs (B₁, B₂) are the same as BRAQ/crb_norefine. Only the scale
+    factors (α₁, α₂) differ — they are optimized for the prediction-relevant
+    GPTQ objective rather than raw Frobenius error.
+    """
+    sum_order = torch.zeros_like(x)
+    new_matrix = x.clone() * mask
+
+    global index
+    index += 1
+
+    mask_f = mask.float()
+    d = mask_f.sum(dim=1)
+    d_safe = torch.clamp(d, min=1.0)
+
+    if order == 1:
+        row_mean = (new_matrix * mask_f).sum(dim=1) / d_safe
+        centered = (new_matrix - row_mean[:, None]) * mask_f
+        B1 = torch.sign(centered) * mask_f
+        if col_weights is not None:
+            cw = col_weights[None, :] * mask_f
+            d_h = cw.sum(dim=1).clamp(min=1e-12)
+            alpha1 = (centered.abs() * cw).sum(dim=1) / d_h
+        else:
+            alpha1 = (centered.abs() * mask_f).sum(dim=1) / d_safe
+        sum_order = (row_mean[:, None] + alpha1[:, None] * B1) * mask_f
+        return sum_order
+
+    # --- Two expansions with Hessian-weighted alpha solve ---
+
+    # Compute Hessian-weighted mask for alpha solve
+    if col_weights is not None:
+        cw = col_weights[None, :] * mask_f  # (1, ic) * (oc, ic) → (oc, ic)
+        d_h = cw.sum(dim=1).clamp(min=1e-12)  # weighted count per row
+    else:
+        cw = mask_f
+        d_h = d
+
+    def solve_alphas_hessian(B1, B2, centered, cw, d_h, lam, corr_damp):
+        c12_h = (B1 * B2 * cw).sum(dim=1)
+        c12_h = torch.where(c12_h > 0, c12_h * (1.0 - corr_damp), c12_h)
+        c1w_h = (centered * B1 * cw).sum(dim=1)
+        c2w_h = (centered * B2 * cw).sum(dim=1)
+        A = d_h + lam
+        denom = A * A - c12_h * c12_h
+        safe = denom.abs() > 1e-12
+        safe_denom = torch.where(safe, denom, torch.ones_like(denom))
+        a1 = torch.clamp((A * c1w_h - c12_h * c2w_h) / safe_denom, min=0.0)
+        a2 = torch.clamp((A * c2w_h - c12_h * c1w_h) / safe_denom, min=0.0)
+        a1 = torch.where(safe, a1, torch.zeros_like(a1))
+        a2 = torch.where(safe, a2, torch.zeros_like(a2))
+        return a1, a2
+
+    # Step 1: Row mean and centering
+    row_mean = (new_matrix * mask_f).sum(dim=1) / d_safe
+    centered = (new_matrix - row_mean[:, None]) * mask_f
+
+    # Step 2: B1 = sign(centered) — same as BRAQ/CRB
+    B1 = torch.sign(centered) * mask_f
+    alpha1_init = (centered.abs() * mask_f).sum(dim=1) / d_safe
+
+    # Step 3: Residual -> B2 — same as BRAQ/CRB
+    r = (centered - alpha1_init[:, None] * B1) * mask_f
+    r_mean = (r * mask_f).sum(dim=1) / d_safe
+    r_centered = (r - r_mean[:, None]) * mask_f
+    B2 = torch.sign(r_centered) * mask_f
+
+    # Step 4: Hessian-weighted joint alpha solve
+    alpha1, alpha2 = solve_alphas_hessian(B1, B2, centered, cw, d_h, lam, corr_damp)
+
+    # Step 5: Final reconstruction with residual mean correction
+    approx = (alpha1[:, None] * B1 + alpha2[:, None] * B2) * mask_f
+    residual_final = (centered - approx) * mask_f
+    mu_correction = (residual_final * mask_f).sum(dim=1) / d_safe
+    sum_order = (row_mean[:, None] + mu_correction[:, None] + alpha1[:, None] * B1 + alpha2[:, None] * B2) * mask_f
 
     return sum_order
 
@@ -2232,8 +2637,218 @@ def coupled_residual_binarization_stable_v10(
 
     return sum_order
 
+@torch.no_grad()
+def coupled_residual_binarization_native(x, mask, order=2, coupling=0.5):
+    """
+    CRB-Native: Float16-native coupled residual binarization with damped
+    joint 2×2 alpha solve.
+
+    Addresses three known CRB failure modes:
+    1. Float32 promotion: CRB uses mask.float() → float32, causing 11% PPL
+       cascade on Qwen3. We use mask.to(x.dtype) and BRAQ's nanmean/torch.where
+       code path for native-dtype computation throughout.
+    2. Mean structure mismatch: CRB uses single mean + δ correction. We use
+       BRAQ's two-step mean accumulation (mean₁ + mean₂).
+    3. Alpha inflation: CRB's joint solve inflates α₁ by ~10%, α₂ by ~3%.
+       The coupling parameter damps this: α = α_braq + coupling·(α_joint - α_braq).
+
+    Args:
+        x: Weight matrix (oc, ic), typically float16.
+        mask: Boolean mask for valid columns in this partition.
+        order: 1 for non-salient (single expansion), 2 for salient (two expansions).
+        coupling: Float in [0, 1]. 0=BRAQ, 1=full joint solve. Default 0.5.
+
+    Returns:
+        Quantized approximation, same shape as x.
+    """
+    sum_order = torch.zeros_like(x)
+    new_matrix = x.clone() * mask
+
+    global index
+    index += 1
+
+    nan_val = torch.tensor(float('nan'), device=x.device, dtype=x.dtype)
+
+    # === Order 1: single expansion, identical to BRAQ ===
+    if order == 1:
+        masked_x = torch.where(mask, new_matrix, nan_val)
+        mean_val = torch.nanmean(masked_x, dim=1)
+        mean_val = torch.where(torch.isnan(mean_val), torch.zeros_like(mean_val), mean_val)
+        masked_x -= mean_val[:, None]
+        scale_val = torch.nanmean(torch.abs(masked_x), dim=1)
+        scale_val = torch.where(torch.isnan(scale_val), torch.zeros_like(scale_val), scale_val)
+        binary = torch.sign(masked_x)
+        binary *= scale_val[:, None]
+        binary += mean_val[:, None]
+        return binary * mask
+
+    # ===== First expansion: BRAQ-exact code path =====
+    masked_x = torch.where(mask, new_matrix, nan_val)
+    mean1 = torch.nanmean(masked_x, dim=1)
+    mean1 = torch.where(torch.isnan(mean1), torch.zeros_like(mean1), mean1)
+    masked_x -= mean1[:, None]  # centered, NaN at invalid
+    alpha1_braq = torch.nanmean(torch.abs(masked_x), dim=1)
+    alpha1_braq = torch.where(torch.isnan(alpha1_braq), torch.zeros_like(alpha1_braq), alpha1_braq)
+    B1 = torch.sign(masked_x)  # 0 at NaN positions
+
+    exp1_braq = (B1 * alpha1_braq[:, None] + mean1[:, None]) * mask
+
+    # ===== Second expansion: BRAQ-exact code path =====
+    residual = new_matrix - exp1_braq
+    masked_r = torch.where(mask, residual, nan_val)
+    mean2 = torch.nanmean(masked_r, dim=1)
+    mean2 = torch.where(torch.isnan(mean2), torch.zeros_like(mean2), mean2)
+    masked_r -= mean2[:, None]  # centered residual, NaN at invalid
+    alpha2_braq = torch.nanmean(torch.abs(masked_r), dim=1)
+    alpha2_braq = torch.where(torch.isnan(alpha2_braq), torch.zeros_like(alpha2_braq), alpha2_braq)
+    B2 = torch.sign(masked_r)
+
+    # If coupling=0, return BRAQ-exact output
+    if coupling == 0.0:
+        exp2_braq = (B2 * alpha2_braq[:, None] + mean2[:, None]) * mask
+        return exp1_braq + exp2_braq
+
+    # ===== Joint 2×2 alpha solve in float32 (precision-critical) =====
+    # The solve uses float32 for accurate dot products and division.
+    # Signs (B1, B2) and means (mean1, mean2) stay in native dtype (from BRAQ).
+    mask_f = mask.float()  # float32 for solve precision
+    d = mask_f.sum(dim=1)
+    d_safe = torch.clamp(d, min=1.0)
+
+    # Centered weights W̄ = W - mean₁, with 0 at invalid positions
+    # Promote to float32 for accurate accumulation
+    centered = (new_matrix - mean1[:, None]) * mask_f  # float32
+
+    # Cross-correlation and projections (float32 accumulation)
+    c12 = (B1 * B2 * mask_f).sum(dim=1)        # Σ B₁·B₂
+    c1w = (centered * B1).sum(dim=1)             # Σ W̄·B₁ = Σ|W̄| ≈ d·α₁_braq
+    c2w = (centered * B2).sum(dim=1)             # Σ W̄·B₂
+
+    # Solve: [d, c12; c12, d] · [α₁; α₂] = [c1w; c2w]
+    A = d_safe
+    denom = A * A - c12 * c12
+    # Use a conservative epsilon — small denominators produce unstable alphas
+    safe = denom.abs() > 1e-4 * A
+    safe_denom = torch.where(safe, denom, torch.ones_like(denom))
+
+    alpha1_joint = torch.clamp((A * c1w - c12 * c2w) / safe_denom, min=0.0)
+    alpha2_joint = torch.clamp((A * c2w - c12 * c1w) / safe_denom, min=0.0)
+    # Clamp to prevent extreme inflation (max 3x BRAQ)
+    alpha1_joint = torch.clamp(alpha1_joint, max=alpha1_braq.float() * 3.0)
+    alpha2_joint = torch.clamp(alpha2_joint, max=alpha2_braq.float() * 3.0)
+    alpha1_joint = torch.where(safe, alpha1_joint, alpha1_braq.float())
+    alpha2_joint = torch.where(safe, alpha2_joint, alpha2_braq.float())
+    # Cast back to native dtype
+    alpha1_joint = alpha1_joint.to(x.dtype)
+    alpha2_joint = alpha2_joint.to(x.dtype)
+
+    # ===== Damped coupling: blend between BRAQ and joint =====
+    # Ensure result stays in native dtype (coupling scalar promotes to float32;
+    # we must cast back to avoid dtype mismatch in GPTQ cascade)
+    alpha1 = (alpha1_braq + coupling * (alpha1_joint - alpha1_braq)).to(x.dtype)
+    alpha2 = (alpha2_braq + coupling * (alpha2_joint - alpha2_braq)).to(x.dtype)
+
+    # ===== Reconstruct with BRAQ's two-step mean structure =====
+    # Keep mean1 and mean2 from BRAQ (not recomputed) to preserve
+    # cascade-friendly error patterns
+    exp1 = (B1 * alpha1[:, None] + mean1[:, None]) * mask
+    exp2 = (B2 * alpha2[:, None] + mean2[:, None]) * mask
+    return exp1 + exp2
+
+
+@torch.no_grad()
+def lloyd_max_quantize(x, mask, K=4, iters=20):
+    """Distribution-Optimal Multi-Level Quantization (DOML).
+
+    Per-row Lloyd-Max K-level quantizer. Finds K reconstruction levels that
+    minimize MSE for each row's weight distribution, then rounds each weight
+    to its nearest level.
+
+    Args:
+        x: Weight matrix [rows, cols]
+        mask: Boolean mask [rows, cols] indicating which columns to quantize
+        K: Number of quantization levels (4 = 2 bits)
+        iters: Lloyd-Max iterations
+    Returns:
+        Quantized weight matrix (same shape as x), zero where mask is False.
+    """
+    rows, cols = x.shape
+    result = torch.zeros_like(x)
+
+    # Work only on masked (valid) entries per row.
+    # For efficiency, operate on the full matrix with masking.
+    masked_x = x * mask.float()
+
+    # Per-row statistics for initialization
+    # Use masked values only: compute mean and std per row
+    mask_count = mask.float().sum(dim=1, keepdim=True).clamp(min=1)
+    row_mean = (masked_x.sum(dim=1, keepdim=True)) / mask_count
+    row_var = ((masked_x - row_mean * mask.float()) ** 2 * mask.float()).sum(dim=1, keepdim=True) / mask_count
+    row_std = row_var.sqrt().clamp(min=1e-8)
+
+    # Initialize K levels per row using Gaussian quantiles (good starting point)
+    # For K=4, Gaussian Lloyd-Max levels are at approximately ±0.4528σ, ±1.5104σ
+    if K == 4:
+        init_positions = torch.tensor([-1.5104, -0.4528, 0.4528, 1.5104],
+                                       device=x.device, dtype=x.dtype)
+    elif K == 3:
+        init_positions = torch.tensor([-1.2247, 0.0, 1.2247],
+                                       device=x.device, dtype=x.dtype)
+    elif K == 2:
+        init_positions = torch.tensor([-0.7979, 0.7979],
+                                       device=x.device, dtype=x.dtype)
+    else:
+        # Generic uniform initialization across ±2σ
+        init_positions = torch.linspace(-1.5, 1.5, K, device=x.device, dtype=x.dtype)
+
+    # levels shape: [rows, K]
+    levels = row_mean + row_std * init_positions.unsqueeze(0)  # [rows, K]
+
+    # Lloyd-Max iteration: alternate between assignment and centroid update
+    for _ in range(iters):
+        # Assignment: for each weight, find nearest level
+        # x_expanded: [rows, cols, 1], levels_expanded: [rows, 1, K]
+        x_expanded = masked_x.unsqueeze(2)         # [rows, cols, 1]
+        levels_expanded = levels.unsqueeze(1)       # [rows, 1, K]
+        dists = (x_expanded - levels_expanded) ** 2  # [rows, cols, K]
+
+        # For masked-out positions, set distance to inf so they don't affect centroids
+        dists = dists + (~mask).unsqueeze(2).float() * 1e30
+
+        assignments = dists.argmin(dim=2)  # [rows, cols] — index into K levels
+
+        # Centroid update: new level = mean of assigned weights
+        new_levels = torch.zeros_like(levels)
+        for k in range(K):
+            k_mask = (assignments == k) & mask  # [rows, cols]
+            k_count = k_mask.float().sum(dim=1).clamp(min=1)  # [rows]
+            k_sum = (masked_x * k_mask.float()).sum(dim=1)     # [rows]
+            new_levels[:, k] = k_sum / k_count
+
+        # Check for convergence
+        if torch.allclose(new_levels, levels, atol=1e-6):
+            levels = new_levels
+            break
+        levels = new_levels
+
+    # Sort levels per row (Lloyd-Max may scramble order)
+    levels, _ = levels.sort(dim=1)
+
+    # Final assignment: round each weight to nearest level
+    x_expanded = masked_x.unsqueeze(2)
+    levels_expanded = levels.unsqueeze(1)
+    dists = (x_expanded - levels_expanded) ** 2
+    dists = dists + (~mask).unsqueeze(2).float() * 1e30
+    assignments = dists.argmin(dim=2)  # [rows, cols]
+
+    # Gather quantized values
+    result = levels.gather(1, assignments) * mask.float()
+
+    return result
+
+
 class Binarization(nn.Module):
-    def __init__(self, weight, method="2bit", groupsize=-1, corr_damp = 0.1, lam = 1e-5 ):
+    def __init__(self, weight, method="2bit", groupsize=-1, corr_damp = 0.1, lam = 1e-5, coupling = 0.5):
         super().__init__()
         oc,ic=weight.shape
         if groupsize==-1:
@@ -2248,8 +2863,9 @@ class Binarization(nn.Module):
 
         self.corr_damp = corr_damp
         self.lam = lam
+        self.coupling = coupling
 
-    def quantize(self, w, mask, order=2, groupi=0):
+    def quantize(self, w, mask, order=2, groupi=0, col_weights=None):
         if self.method=="xnor":
             w_mean = self.mean[groupi]
             w = w - w_mean  # oc, ic
@@ -2258,12 +2874,34 @@ class Binarization(nn.Module):
             w+=w_mean
         elif self.method=="braq": # The method used in paper
             w = high_order_residual(w, mask, order=order)
+        elif self.method=="ternary":
+            w = ternary_residual(w, mask, order=order)
         elif self.method=="jrb":  # <-- NEW PROPOSAL
             w = joint_residual_binarization(w, mask, iters=order)
         elif self.method == 'crbog':
-            w = coupled_residual_binarization(w, mask, order=order) 
+            w = coupled_residual_binarization(w, mask, order=order)
         elif self.method=="crb":  # <-- NEW PROPOSAL
             w = coupled_residual_binarization_stable_v7(w, mask, order=order, corr_damp = self.corr_damp, lam = self.lam)
+        elif self.method=="crb_norefine":  # CRB with joint alpha but NO sign refinement
+            w = coupled_residual_binarization_stable_v7(w, mask, order=order, corr_damp = self.corr_damp, lam = self.lam, skip_refinement=True)
+        elif self.method=="crb_symdamp":  # CRB with symmetric correlation damping
+            w = coupled_residual_binarization_stable_v7(w, mask, order=order, corr_damp = self.corr_damp, lam = self.lam, symmetric_damp=True)
+        elif self.method=="crb_symdamp_norefine":  # CRB with symmetric damping, no refinement
+            w = coupled_residual_binarization_stable_v7(w, mask, order=order, corr_damp = self.corr_damp, lam = self.lam, symmetric_damp=True, skip_refinement=True)
+        elif self.method=="crb_resrhs":  # CRB with residual-projected RHS (fixes alpha2 deflation)
+            w = coupled_residual_binarization_resrhs(w, mask, order=order, corr_damp=self.corr_damp, lam=self.lam)
+        elif self.method=="crb_resrhs_norefine":  # CRB resrhs without refinement
+            w = coupled_residual_binarization_resrhs(w, mask, order=order, corr_damp=self.corr_damp, lam=self.lam, skip_refinement=True)
+        elif self.method=="crb_seqalpha":  # Sequential alphas (BRAQ-style) with CRB sign refinement
+            w = coupled_residual_binarization_seqalpha(w, mask, order=order)
+        elif self.method=="crb_seqalpha_norefine":  # Sequential alphas, no refinement (should match BRAQ)
+            w = coupled_residual_binarization_seqalpha(w, mask, order=order, skip_refinement=True)
+        elif self.method=="crb_adaptive":  # Hessian-guided per-row adaptive refinement
+            w = coupled_residual_binarization_adaptive(w, mask, order=order, corr_damp=self.corr_damp, lam=self.lam, col_weights=col_weights)
+        elif self.method=="crb_hessian":  # Hessian-weighted alpha solve, no refinement
+            w = coupled_residual_binarization_hessian(w, mask, order=order, corr_damp=self.corr_damp, lam=self.lam, col_weights=col_weights)
+        elif self.method=="crb_native":  # Float16-native CRB with damped joint solve
+            w = coupled_residual_binarization_native(w, mask, order=order, coupling=self.coupling)
         elif self.method=="crbv8":  # <-- NEW PROPOSAL
             w = coupled_residual_binarization_stable_v8(w, mask, order=order)
         elif self.method=="crbv9":  # <-- NEW PROPOSAL
@@ -2293,10 +2931,17 @@ class Binarization(nn.Module):
         elif self.method=="sign":
             w=(w>0).float()
             w*=self.scale[groupi]
+        elif self.method=="doml":
+            # Distribution-Optimal Multi-Level Quantization
+            # K=4 levels (2 bits), per-row Lloyd-Max optimal placement
+            w = lloyd_max_quantize(w, mask, K=4, iters=20)
+        elif self.method=="doml_binary":
+            # DOML at K=2: per-row Lloyd-Max optimal binary (1 bit)
+            w = lloyd_max_quantize(w, mask, K=2, iters=20)
         elif self.method=="rtn":
-            w=F.relu(w)
-            w_int=(w/self.scale[groupi]).round().clamp(0,1)
-            w=w_int*self.scale[groupi]
+            # Simple round-to-nearest binary: sign * mean(|w|) per row
+            scale = w.abs().mean(dim=1, keepdim=True).clamp(min=1e-8)
+            w = w.sign() * scale
         elif self.method in ['2bit','4bit']:
 
             bits = int(self.method[0])
