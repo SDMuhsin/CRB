@@ -119,7 +119,7 @@ techniques=(
     #"lnq"
     #"tesseraq"
     #"pb-llm"
-    #"doml-binary"
+    "doml-binary"
     #"braq"
 )
 
