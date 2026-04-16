@@ -255,10 +255,26 @@ for technique in "${techniques[@]}"; do
         echo "Config: $technique_desc"
         echo "Command: $python_cmd"
         echo "========================================"
+        if [[ -n "${SCRATCH:-}" && -d "${SCRATCH}" ]]; then
+            CACHE_ROOT_LOCAL="$SCRATCH/billm2_cache"
+        else
+            CACHE_ROOT_LOCAL="$(pwd)/downloads"
+        fi
+        if [[ "$CACHE_ROOT_LOCAL" != "$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
+            ln -sfn "$CACHE_ROOT_LOCAL" ./downloads
+        fi
         export BILLM_BENCH_CSV="$CSV_ABS"
-        export HF_HOME=$(pwd)/downloads
-        export TRANSFORMERS_CACHE=$(pwd)/downloads
-        export TORCH_HOME=$(pwd)/downloads
+        export HF_HOME="$CACHE_ROOT_LOCAL/hf"
+        export HF_DATASETS_CACHE="$CACHE_ROOT_LOCAL/hf/datasets"
+        export HF_HUB_CACHE="$CACHE_ROOT_LOCAL/hf/hub"
+        export TRANSFORMERS_CACHE="$CACHE_ROOT_LOCAL/hf"
+        export TORCH_HOME="$CACHE_ROOT_LOCAL/torch"
+        export NUMBA_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/numba"
+        export PIP_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/pip"
+        export XDG_CACHE_HOME="$CACHE_ROOT_LOCAL/.cache"
+        export TMPDIR="${SLURM_TMPDIR:-$CACHE_ROOT_LOCAL/tmp}"
+        mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
+                 "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR"
         export HF_DATASETS_OFFLINE=1
         export TRANSFORMERS_OFFLINE=1
         export HF_HUB_OFFLINE=1
@@ -289,14 +305,45 @@ $account_line
 module load gcc arrow scipy-stack cuda cudnn
 source ./env/bin/activate
 
-# Project-local HF / Torch caches (compute nodes have no internet).
-export HF_HOME=\$(pwd)/downloads
-export TRANSFORMERS_CACHE=\$(pwd)/downloads
-export TORCH_HOME=\$(pwd)/downloads
+# Route every cache to \$SCRATCH (1 TB soft / 20 TB hard on Nibi).
+# /project is code-only; \$HOME has only ~50 GiB. Falling back to defaults
+# corrupts arrow caches and OOMs the disk quota.
+if [[ -n "\${SCRATCH:-}" && -d "\${SCRATCH}" ]]; then
+    CACHE_ROOT="\$SCRATCH/billm2_cache"
+else
+    CACHE_ROOT="\$(pwd)/downloads"
+fi
+
+# Re-create ./downloads -> \$CACHE_ROOT symlink defensively (datautils.py
+# and PB-LLM both hardcode the relative './downloads' path).
+if [[ "\$CACHE_ROOT" != "\$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
+    ln -sfn "\$CACHE_ROOT" ./downloads
+fi
+
+export HF_HOME="\$CACHE_ROOT/hf"
+export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
+export HF_HUB_CACHE="\$CACHE_ROOT/hf/hub"
+export TRANSFORMERS_CACHE="\$CACHE_ROOT/hf"
+export TORCH_HOME="\$CACHE_ROOT/torch"
+# \$HOME-default caches that must not leak back: numba JIT (LNQ uses it),
+# pip wheels, generic XDG cache, and unpacking TMPDIR.
+export NUMBA_CACHE_DIR="\$CACHE_ROOT/.cache/numba"
+export PIP_CACHE_DIR="\$CACHE_ROOT/.cache/pip"
+export XDG_CACHE_HOME="\$CACHE_ROOT/.cache"
+# Use the per-job NVMe local disk for transient unpacking when available
+# (gets wiped at job end; perfect for arrow shard extraction).
+if [[ -n "\${SLURM_TMPDIR:-}" && -d "\${SLURM_TMPDIR}" ]]; then
+    export TMPDIR="\$SLURM_TMPDIR"
+else
+    export TMPDIR="\$CACHE_ROOT/tmp"
+fi
+mkdir -p "\$HF_HOME" "\$HF_DATASETS_CACHE" "\$HF_HUB_CACHE" "\$TORCH_HOME" \\
+         "\$NUMBA_CACHE_DIR" "\$PIP_CACHE_DIR" "\$XDG_CACHE_HOME" "\$TMPDIR"
+
+# Compute nodes have no internet — caches must be pre-warmed via download_cache.sh.
 export HF_DATASETS_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_HUB_OFFLINE=1
-mkdir -p \$HF_HOME
 
 # Shared thread-safe CSV target (fcntl LOCK_EX inside src/csv_utils.py).
 export BILLM_BENCH_CSV="$CSV_ABS"
@@ -318,7 +365,8 @@ echo "Time limit: $time_limit"
 echo "GPU:        $gpu_resource"
 echo "CPUs / Mem: $cpus / $mem"
 echo "CSV:        \$BILLM_BENCH_CSV"
-echo "Cache:      \$HF_HOME"
+echo "Cache root: \$CACHE_ROOT (\$HF_HOME)"
+echo "TMPDIR:     \$TMPDIR"
 echo "Started:    \$(date)"
 echo "SLURM job:  \$SLURM_JOB_ID"
 echo '========================================'
