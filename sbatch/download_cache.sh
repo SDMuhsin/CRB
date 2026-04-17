@@ -63,16 +63,24 @@ fi
 # 3. Point every HuggingFace / Torch cache env var at CACHE_ROOT.
 #    HF_DATASETS_CACHE is the key one — that's where arrow shards land.
 # ---------------------------------------------------------------------------
-export HF_HOME="$CACHE_ROOT/hf"
-export HF_DATASETS_CACHE="$CACHE_ROOT/hf/datasets"
-export HF_HUB_CACHE="$CACHE_ROOT/hf/hub"
-export TRANSFORMERS_CACHE="$CACHE_ROOT/hf"
-export TORCH_HOME="$CACHE_ROOT/torch"
-export HF_HUB_DISABLE_XET=1
 # Project-level override read by datautils.py / run.py / PB-LLM / src/run_*.py.
 # This is the explicit, non-symlink-based way to redirect every hardcoded
 # ./downloads/... path the project uses.
 export BILLM_DOWNLOADS_DIR="$CACHE_ROOT/downloads"
+
+# CRITICAL — HF_HUB_CACHE must equal BILLM_DOWNLOADS_DIR. The runners call
+# AutoModelForCausalLM.from_pretrained(model, cache_dir=downloads_dir, ...)
+# but datautils.get_tokenizer calls AutoTokenizer.from_pretrained(model) with
+# NO cache_dir, which falls back to HF_HUB_CACHE. If those two are different
+# directories, the offline compute job finds the model but not the tokenizer
+# (or vice-versa). Aligning them here means snapshot_download, AutoModel,
+# and AutoTokenizer all read/write the same models--*/ tree.
+export HF_HOME="$CACHE_ROOT/hf"
+export HF_HUB_CACHE="$BILLM_DOWNLOADS_DIR"
+export HF_DATASETS_CACHE="$CACHE_ROOT/hf/datasets"
+export TRANSFORMERS_CACHE="$CACHE_ROOT/hf"
+export TORCH_HOME="$CACHE_ROOT/torch"
+export HF_HUB_DISABLE_XET=1
 # Anything that defaults to $HOME/.cache/* must be redirected too — $HOME on
 # Nibi has only ~50 GiB and goes over-quota fast (numba JIT, pip wheels, etc.).
 export NUMBA_CACHE_DIR="$CACHE_ROOT/.cache/numba"
@@ -110,20 +118,30 @@ unset DL_REAL
 # ============================================================================
 # Models — Qwen3-0.6B is the target for this benchmark suite
 # ============================================================================
+#
+# IMPORTANT: write the model under \$BILLM_DOWNLOADS_DIR (cache_dir argument),
+# NOT the default HF_HUB_CACHE. The project's runners call
+# from_pretrained(..., cache_dir=downloads_dir) so they read from there at
+# job time. snapshot_download must use the SAME directory or the offline
+# compute job will fail to find the model under HF_HUB_OFFLINE=1.
+# ============================================================================
 
-echo "=== Downloading models (snapshot only, no loading) ==="
+echo "=== Downloading models (snapshot to BILLM_DOWNLOADS_DIR) ==="
+echo "    target: $BILLM_DOWNLOADS_DIR"
 
 python -c "
+import os
 from huggingface_hub import snapshot_download
 
+cache_dir = os.environ['BILLM_DOWNLOADS_DIR']
 models = [
     'Qwen/Qwen3-0.6B',
 ]
 
 for model_name in models:
-    print(f'Downloading {model_name}...')
-    snapshot_download(repo_id=model_name)
-    print(f'  Done: {model_name}')
+    print(f'Downloading {model_name} -> {cache_dir} ...')
+    path = snapshot_download(repo_id=model_name, cache_dir=cache_dir)
+    print(f'  Done: {path}')
 "
 
 echo ""

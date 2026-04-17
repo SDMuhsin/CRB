@@ -86,12 +86,17 @@ SEED=0
 CSV_NAME="${MODEL_SHORT}_ptq_benchmark.csv"
 CSV_ABS="$(pwd)/results/$CSV_NAME"
 
-# Nibi MIG GRES strings. If `sinfo -o "%G"` shows Rorqual-style long names,
-# switch to the commented alternatives below.
-GPU_SMALL="--gres=gpu:1g.10gb:1"
-GPU_MEDIUM="--gres=gpu:2g.20gb:1"
-# GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
-# GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
+# Nibi GRES strings. Verified against SLURM error message — short forms like
+# `1g.10gb` are NOT registered; you must use the full nvidia_h100_80gb_hbm3_*
+# prefix. Authoritative list of accepted GPU types on Nibi:
+#   h100                            (full 80 GB H100)
+#   nvidia_h100_80gb_hbm3_4g.40gb   (4/8 compute, 40 GB)
+#   nvidia_h100_80gb_hbm3_3g.40gb   (3/8 compute, 40 GB)
+#   nvidia_h100_80gb_hbm3_2g.20gb   (2/8 compute, 20 GB)
+#   nvidia_h100_80gb_hbm3_1g.10gb   (1/8 compute, 10 GB)
+#   mi300a, a100, a5000, t4
+GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
+GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
 
 # Shared quantization hyperparameters (match existing BiLLM2 defaults /
 # published best settings for fair cross-method comparison at 2 bits).
@@ -273,16 +278,16 @@ for technique in "${techniques[@]}"; do
             ln -sfn "$CACHE_ROOT_LOCAL" ./downloads
         fi
         export BILLM_BENCH_CSV="$CSV_ABS"
+        export BILLM_DOWNLOADS_DIR="$CACHE_ROOT_LOCAL/downloads"
         export HF_HOME="$CACHE_ROOT_LOCAL/hf"
+        export HF_HUB_CACHE="$BILLM_DOWNLOADS_DIR"
         export HF_DATASETS_CACHE="$CACHE_ROOT_LOCAL/hf/datasets"
-        export HF_HUB_CACHE="$CACHE_ROOT_LOCAL/hf/hub"
         export TRANSFORMERS_CACHE="$CACHE_ROOT_LOCAL/hf"
         export TORCH_HOME="$CACHE_ROOT_LOCAL/torch"
         export NUMBA_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/numba"
         export PIP_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/pip"
         export XDG_CACHE_HOME="$CACHE_ROOT_LOCAL/.cache"
         export TMPDIR="${SLURM_TMPDIR:-$CACHE_ROOT_LOCAL/tmp}"
-        export BILLM_DOWNLOADS_DIR="$CACHE_ROOT_LOCAL/downloads"
         mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
                  "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR" \
                  "$BILLM_DOWNLOADS_DIR"
@@ -331,14 +336,17 @@ if [[ "\$CACHE_ROOT" != "\$(pwd)/downloads" && ! -L ./downloads && ! -e ./downlo
     ln -sfn "\$CACHE_ROOT" ./downloads
 fi
 
-export HF_HOME="\$CACHE_ROOT/hf"
-export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
-export HF_HUB_CACHE="\$CACHE_ROOT/hf/hub"
-export TRANSFORMERS_CACHE="\$CACHE_ROOT/hf"
-export TORCH_HOME="\$CACHE_ROOT/torch"
 # Project-level override read by datautils.py / run.py / PB-LLM / src/run_*.py
 # — replaces every hardcoded ./downloads/... path with an absolute scratch path.
 export BILLM_DOWNLOADS_DIR="\$CACHE_ROOT/downloads"
+
+# HF_HUB_CACHE must equal BILLM_DOWNLOADS_DIR — see download_cache.sh comment
+# for the rationale (AutoTokenizer.from_pretrained has no cache_dir override).
+export HF_HOME="\$CACHE_ROOT/hf"
+export HF_HUB_CACHE="\$BILLM_DOWNLOADS_DIR"
+export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
+export TRANSFORMERS_CACHE="\$CACHE_ROOT/hf"
+export TORCH_HOME="\$CACHE_ROOT/torch"
 # \$HOME-default caches that must not leak back: numba JIT (LNQ uses it),
 # pip wheels, generic XDG cache, and unpacking TMPDIR.
 export NUMBA_CACHE_DIR="\$CACHE_ROOT/.cache/numba"
