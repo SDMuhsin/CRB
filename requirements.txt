@@ -1,34 +1,38 @@
 # Tuned for Alliance Canada wheelhouse compatibility (Nibi, Python 3.11).
 #
-# Strategy:
-#   - Lower bounds capture the API requirements (Qwen2.5 needs transformers
-#     >= 4.39; numpy 2.x breaks torch + numba builds; etc.).
-#   - NO upper bounds (except numpy<2) so `pip install --no-index` is free
-#     to resolve whatever version Alliance currently ships, instead of
-#     forcing a PyPI fallback that conflicts with `+computecanada` wheels.
+# CRITICAL — Qwen3 support requires transformers >= 4.51.0 (April 2025). If
+# the Alliance wheelhouse does not yet ship a transformers >= 4.51, the
+# `transformers` / `tokenizers` / `huggingface_hub` trio MUST be installed
+# from PyPI (i.e. drop `--no-index` for those). Previous pin of >=4.42
+# silently resolved to a wheel that lacks Qwen3ForCausalLM and produced:
+#     ModuleNotFoundError: Could not import module 'Qwen3ForCausalLM'.
 #
 # Install on a Nibi compute env:
 #     module load gcc arrow scipy-stack cuda cudnn python/3.11
 #     virtualenv --no-download env && source env/bin/activate
 #     pip install --no-index --upgrade pip
-#     pip install --no-index -r requirements.txt
-#
-# If --no-index reports a missing wheel for ONE package (most likely
-# flash1dkmeans), drop --no-index for that single install:
+#     # Try wheelhouse first:
+#     pip install --no-index -r requirements.txt || true
+#     # Then force PyPI for Qwen3-capable transformers (wheelhouse may lag):
+#     pip install --upgrade 'transformers>=4.51' 'tokenizers>=0.21' 'huggingface_hub>=0.25'
+#     # flash1dkmeans is not in the wheelhouse either:
 #     pip install flash1dkmeans
+#
+# Verify Qwen3 is importable before submitting sbatch jobs:
+#     python -c "from transformers.models.qwen3 import Qwen3ForCausalLM; print('ok')"
 
-# ---- Core PTQ / eval stack (all in Alliance wheelhouse) ----------------------
+# ---- Core PTQ / eval stack --------------------------------------------------
 torch>=2.3                      # 2.3.0+cc and 2.5.1+cc both validated
-transformers>=4.42              # Qwen2.5 needs >=4.39; CC stocks 4.42.x
-tokenizers>=0.19                # transformers 4.42 uses tokenizers 0.19.x
-huggingface_hub>=0.23           # transformers 4.42 + datasets 2.20 minimum
+transformers>=4.51              # Qwen3 landed in 4.51.0; <4.51 breaks Qwen3-*
+tokenizers>=0.21                # paired with transformers 4.51
+huggingface_hub>=0.25           # paired with transformers 4.51
 safetensors>=0.4
 accelerate>=0.30
-datasets>=2.18                  # CC stocks 2.20.0
+datasets>=2.18,<3               # 3.x changes script-loading; stay on 2.x
 pyarrow>=12                     # provided by `module load arrow`
 sentencepiece>=0.2
 numpy>=1.24,<2                  # CC has 1.26.4+cc; numpy 2.x is incompatible
-exceptiongroup
+exceptiongroup; python_version<"3.11"
 
 # ---- GuidedQuant / LNQ (src/run_lnq.py only) --------------------------------
 # numba is in the Alliance wheelhouse. flash1dkmeans is a small pure-numba

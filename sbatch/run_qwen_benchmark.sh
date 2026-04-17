@@ -282,8 +282,8 @@ for technique in "${techniques[@]}"; do
         export HF_HOME="$CACHE_ROOT_LOCAL/hf"
         export HF_HUB_CACHE="$BILLM_DOWNLOADS_DIR"
         export HF_DATASETS_CACHE="$CACHE_ROOT_LOCAL/hf/datasets"
-        export TRANSFORMERS_CACHE="$CACHE_ROOT_LOCAL/hf"
         export TORCH_HOME="$CACHE_ROOT_LOCAL/torch"
+        export HF_HUB_DISABLE_XET=1
         export NUMBA_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/numba"
         export PIP_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/pip"
         export XDG_CACHE_HOME="$CACHE_ROOT_LOCAL/.cache"
@@ -345,8 +345,11 @@ export BILLM_DOWNLOADS_DIR="\$CACHE_ROOT/downloads"
 export HF_HOME="\$CACHE_ROOT/hf"
 export HF_HUB_CACHE="\$BILLM_DOWNLOADS_DIR"
 export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
-export TRANSFORMERS_CACHE="\$CACHE_ROOT/hf"
+# TRANSFORMERS_CACHE is deprecated since transformers 4.36; HF_HOME covers it.
 export TORCH_HOME="\$CACHE_ROOT/torch"
+# Offline XET resolution fails on compute nodes; disable so the snapshot
+# under HF_HUB_CACHE is read directly.
+export HF_HUB_DISABLE_XET=1
 # \$HOME-default caches that must not leak back: numba JIT (LNQ uses it),
 # pip wheels, generic XDG cache, and unpacking TMPDIR.
 export NUMBA_CACHE_DIR="\$CACHE_ROOT/.cache/numba"
@@ -393,7 +396,21 @@ echo "TMPDIR:     \$TMPDIR"
 echo "Started:    \$(date)"
 echo "SLURM job:  \$SLURM_JOB_ID"
 echo '========================================'
-nvidia-smi
+echo "Python:             \$(which python)"
+python --version
+echo "CUDA_VISIBLE_DEVICES=\$CUDA_VISIBLE_DEVICES"
+# Sanity check: Qwen3 must be importable. If this fails the job aborts early
+# instead of 40 min into a partial run.
+python -c "from transformers.models.qwen3 import Qwen3ForCausalLM; import transformers; print('transformers', transformers.__version__)" || {
+    echo "FATAL: Qwen3ForCausalLM not importable — transformers is too old (<4.51)."
+    exit 1
+}
+# Verify model snapshot actually exists before going offline.
+ls -d "\$BILLM_DOWNLOADS_DIR"/models--*Qwen3* 2>/dev/null || {
+    echo "FATAL: no Qwen3 snapshot under \$BILLM_DOWNLOADS_DIR — run ./sbatch/download_cache.sh first."
+    exit 1
+}
+nvidia-smi || true
 $python_cmd
 echo '========================================'
 echo "Finished:   \$(date)"

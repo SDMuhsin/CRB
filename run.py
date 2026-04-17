@@ -41,11 +41,11 @@ def get_model(model_name):
             model.seqlen = 2048
         elif "qwen" in model_name.lower():
             from transformers import AutoModelForCausalLM
-            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, attn_implementation="eager")
+            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
             model.seqlen = min(model.config.max_position_embeddings, 2048)
         elif "smollm" in model_name.lower():
             from transformers import AutoModelForCausalLM
-            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, attn_implementation="eager")
+            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
             model.seqlen = min(model.config.max_position_embeddings, 2048)
         elif "pythia" in model_name.lower():
             from transformers import GPTNeoXForCausalLM
@@ -59,7 +59,7 @@ def get_model(model_name):
             model.seqlen = 2048
         elif "granite" in model_name.lower():
             from transformers import AutoModelForCausalLM
-            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, attn_implementation="eager")
+            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
             model.seqlen = min(model.config.max_position_embeddings, 2048)
         else:
             raise ValueError("Unsupported model type")

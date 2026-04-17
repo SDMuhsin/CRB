@@ -78,7 +78,7 @@ export BILLM_DOWNLOADS_DIR="$CACHE_ROOT/downloads"
 export HF_HOME="$CACHE_ROOT/hf"
 export HF_HUB_CACHE="$BILLM_DOWNLOADS_DIR"
 export HF_DATASETS_CACHE="$CACHE_ROOT/hf/datasets"
-export TRANSFORMERS_CACHE="$CACHE_ROOT/hf"
+# TRANSFORMERS_CACHE is deprecated since transformers 4.36; HF_HOME covers it.
 export TORCH_HOME="$CACHE_ROOT/torch"
 export HF_HUB_DISABLE_XET=1
 # Anything that defaults to $HOME/.cache/* must be redirected too — $HOME on
@@ -132,6 +132,7 @@ echo "    target: $BILLM_DOWNLOADS_DIR"
 python -c "
 import os
 from huggingface_hub import snapshot_download
+from transformers import AutoTokenizer, AutoConfig
 
 cache_dir = os.environ['BILLM_DOWNLOADS_DIR']
 models = [
@@ -141,7 +142,24 @@ models = [
 for model_name in models:
     print(f'Downloading {model_name} -> {cache_dir} ...')
     path = snapshot_download(repo_id=model_name, cache_dir=cache_dir)
-    print(f'  Done: {path}')
+    print(f'  Snapshot: {path}')
+    # Touch the tokenizer + config so the transformers cache index is warmed
+    # under the SAME cache_dir the runners will read from offline.
+    AutoConfig.from_pretrained(model_name, cache_dir=cache_dir)
+    AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
+    print(f'  Tokenizer + config ready.')
+
+# Abort here if this transformers is too old for Qwen3 — catches wheelhouse
+# wheels that lack Qwen3ForCausalLM before any sbatch job is submitted.
+try:
+    from transformers.models.qwen3 import Qwen3ForCausalLM  # noqa: F401
+    import transformers
+    print(f'Qwen3 import OK (transformers {transformers.__version__}).')
+except Exception as exc:
+    raise SystemExit(
+        f'FATAL: Qwen3ForCausalLM not importable ({exc!r}). '
+        'Install transformers>=4.51 from PyPI (see requirements.txt header).'
+    )
 "
 
 echo ""

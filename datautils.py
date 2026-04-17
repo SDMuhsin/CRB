@@ -17,39 +17,26 @@ downloads_dir = os.environ.get("BILLM_DOWNLOADS_DIR", "./downloads")
 Generate tokenizer and return it to preload datasets by converting them to embedded vectors instead of natural words
 '''
 def get_tokenizer(model_name):
-    tokenizer_path = os.path.join(downloads_dir, f"DOWNLOAD_{model_name}_tokenizer")
-    os.makedirs(os.path.dirname(tokenizer_path), exist_ok=True)  # Ensure directories exist
-    
-    if os.path.exists(tokenizer_path):
-        print(f"Loading tokenizer from {tokenizer_path}")
-        tokenizer = torch.load(tokenizer_path)
+    # Load from HuggingFace's own cache under $BILLM_DOWNLOADS_DIR.
+    # Do NOT pickle the tokenizer — pickled tokenizers are bound to the
+    # exact transformers version that wrote them and break cryptically
+    # after any upgrade (e.g. wheelhouse transformers 4.42 -> PyPI 4.51).
+    if "llama" in model_name.lower() or "danube" in model_name.lower():
+        tokenizer = LlamaTokenizer.from_pretrained(
+            model_name, use_fast=False, cache_dir=downloads_dir,
+        )
+        if tokenizer.bos_token_id != 1 or tokenizer.eos_token_id != 2:
+            try:
+                tokenizer.bos_token_id = 1
+                tokenizer.eos_token_id = 2
+            except AttributeError:
+                pass
+    elif any(k in model_name.lower() for k in ("smollm", "pythia", "qwen", "bloom", "granite")):
+        tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=downloads_dir)
     else:
-        print(f"Downloading tokenizer for {model_name}")
-        if "llama" in model_name.lower() or "danube" in model_name.lower():
-            tokenizer = LlamaTokenizer.from_pretrained(model_name, use_fast=False)
-            # Fix for transformer 4.28.0.dev0 compatibility
-            if tokenizer.bos_token_id != 1 or tokenizer.eos_token_id != 2:
-                try:
-                    tokenizer.bos_token_id = 1
-                    tokenizer.eos_token_id = 2
-                except AttributeError:
-                    pass
-        elif "smollm" in model_name.lower():
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-        elif "pythia" in model_name.lower():
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-        elif "qwen" in model_name.lower():
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-        elif "bloom" in model_name.lower():
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-        elif "granite" in model_name.lower():
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-        else:
-            tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
-        
-        torch.save(tokenizer, tokenizer_path)
-        print(f"Tokenizer saved to {tokenizer_path}")
-    
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name, use_fast=False, cache_dir=downloads_dir,
+        )
     return tokenizer
 
 def get_wikitext2(nsamples, seed, seqlen, model, tokenizer):
