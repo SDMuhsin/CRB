@@ -108,7 +108,7 @@ esac
 unset DL_REAL
 
 # ============================================================================
-# Models — Qwen2.5-0.5B is the target for this benchmark suite
+# Models — Qwen3-0.6B is the target for this benchmark suite
 # ============================================================================
 
 echo "=== Downloading models (snapshot only, no loading) ==="
@@ -117,7 +117,7 @@ python -c "
 from huggingface_hub import snapshot_download
 
 models = [
-    'Qwen/Qwen2.5-0.5B',
+    'Qwen/Qwen3-0.6B',
 ]
 
 for model_name in models:
@@ -188,9 +188,9 @@ echo ""
 #     import sys; sys.path.insert(0, \".\")
 #     from datautils import get_loaders
 #     get_loaders(\"wikitext2\", nsamples=128, seed=0, seqlen=2048,
-#                 model=\"Qwen/Qwen2.5-0.5B\")
+#                 model=\"Qwen/Qwen3-0.6B\")
 #     get_loaders(\"redpajama\", nsamples=1024, seed=0, seqlen=4096,
-#                 model=\"Qwen/Qwen2.5-0.5B\")"
+#                 model=\"Qwen/Qwen3-0.6B\")"
 #   '
 # ============================================================================
 

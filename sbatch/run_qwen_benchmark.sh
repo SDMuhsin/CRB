@@ -1,9 +1,9 @@
 #!/bin/bash
 # ============================================================================
-# Qwen2.5-0.5B — 2-bit & 1-bit PTQ benchmark suite (Nibi / Alliance Canada)
+# Qwen3-0.6B — 2-bit & 1-bit PTQ benchmark suite (Nibi / Alliance Canada)
 # ============================================================================
 #
-# Dispatches one sbatch job per quantization method on Qwen2.5-0.5B.
+# Dispatches one sbatch job per quantization method on Qwen3-0.6B.
 # All jobs append WikiText-2 perplexity (+ any enabled downstream evals) to
 # a single shared CSV, guarded by fcntl LOCK_EX inside src/csv_utils.py.
 #
@@ -19,10 +19,11 @@
 #     tesseraq      TesseraQ, bit=2, 250 optim iters (~2.25 bpw)
 #     pb-llm        PB-LLM partial binarization: xnor, low_frac=0.9,
 #                   high_bit=8 (~1.7 bpw — closest PB-LLM config to 2 bit)
+#     doml          DOML K=4 (Lloyd-Max 4-level) + GPTQ + structural
+#                   partition, magnitude salience (~2.06–2.15 bpw — flagship)
 #
 #   ~1 bit per weight ----------------------------------------------------
-#     doml-binary   DOML K=2 (Lloyd-Max 2-level) + GPTQ + structural
-#                   partition, magnitude salience (~1.07 bpw)
+#     doml-binary   DOML K=2 variant (~1.07 bpw)
 #     braq          BRAQ baseline, magnitude salience (~1.07 bpw)
 #
 # Hyperparameters below are chosen to match each method's paper / known-
@@ -76,8 +77,8 @@ done
 # CONFIGURATION
 # ============================================================================
 
-MODEL="Qwen/Qwen2.5-0.5B"
-MODEL_SHORT="qwen25_05b"
+MODEL="Qwen/Qwen3-0.6B"
+MODEL_SHORT="qwen3_06b"
 DATASET="wikitext2"             # PPL eval dataset
 SEED=0
 
@@ -119,7 +120,8 @@ techniques=(
     #"lnq"
     #"tesseraq"
     #"pb-llm"
-    "doml-binary"
+    "doml"
+    #"doml-binary"
     #"braq"
 )
 
@@ -129,7 +131,7 @@ techniques=(
 
 get_job_resources() {
     # Sets: gpu_resource, cpus, mem
-    # Qwen2.5-0.5B is small (~1 GB fp16). 1g.10gb covers every method
+    # Qwen3-0.6B is small (~1.2 GB fp16). 1g.10gb covers every method
     # except LNQ (1024×4096 activations + Fisher grads) and TesseraQ
     # (250 iters with backward pass), which want 2g.20gb.
     case $1 in
@@ -156,7 +158,8 @@ get_time_limit() {
         gptq-2bit)    echo "00:45:00" ;;
         sinq)         echo "00:40:00" ;;
         pb-llm)       echo "00:50:00" ;;
-        doml-binary)  echo "00:50:00" ;;
+        doml)         echo "00:50:00" ;;  # 2-bit DOML — flagship method
+        doml-binary)  echo "00:50:00" ;;  # 1-bit variant
         braq)         echo "00:50:00" ;;
         tesseraq)     echo "02:30:00" ;;  # 250 optim iters
         lnq)          echo "04:00:00" ;;  # Fisher + saliency + LNQ refine
@@ -182,7 +185,12 @@ build_python_cmd() {
         gptq-2bit)
             echo "python3 -u run.py $MODEL $DATASET 2bit --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
             ;;
+        doml)
+            # Flagship 2-bit method: K=4 Lloyd-Max + GPTQ + structural partition (~2.06–2.15 bpw).
+            echo "python3 -u run.py $MODEL $DATASET doml --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
+            ;;
         doml-binary)
+            # 1-bit DOML variant (K=2, ~1.07 bpw).
             echo "python3 -u run.py $MODEL $DATASET doml_binary --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
             ;;
         braq)
@@ -217,6 +225,7 @@ get_technique_desc() {
         lnq)          echo "GuidedQuant/LNQ (nbits=$LNQ_NBITS, $LNQ_CALIB/$LNQ_NSAMPLES/$LNQ_SEQLEN, groups=$LNQ_NUM_GROUPS, no_propagate)" ;;
         tesseraq)     echo "TesseraQ (bit=$TESSERAQ_BIT, gs=$TESSERAQ_GROUPSIZE, iters=$TESSERAQ_ITERATIONS)" ;;
         pb-llm)       echo "PB-LLM ($PBLLM_METHOD, low_frac=$PBLLM_LOW_FRAC, high_bit=$PBLLM_HIGH_BIT, blocksize=$BLOCKSIZE)" ;;
+        doml)         echo "DOML (K=4, Lloyd-Max + GPTQ + structural partition, salient=$SALIENT_METRIC)" ;;
         doml-binary)  echo "DOML-binary (K=2, Lloyd-Max + GPTQ + structural partition)"     ;;
         braq)         echo "BRAQ 1-bit baseline (blocksize=$BLOCKSIZE)"                     ;;
     esac
@@ -230,7 +239,7 @@ job_count=0
 mkdir -p ./logs ./results
 
 echo "============================================"
-echo "Qwen2.5-0.5B PTQ Benchmark Suite (Nibi)"
+echo "Qwen3-0.6B PTQ Benchmark Suite (Nibi)"
 echo "============================================"
 echo "Model:       $MODEL"
 echo "Dataset:     $DATASET"
@@ -297,7 +306,7 @@ for technique in "${techniques[@]}"; do
 #SBATCH --output=./logs/${job_name}_%j.out
 #SBATCH --error=./logs/${job_name}_%j.err
 #SBATCH --time=$time_limit
-$gpu_resource
+#SBATCH $gpu_resource
 #SBATCH --cpus-per-task=$cpus
 #SBATCH --mem=$mem
 #SBATCH --ntasks-per-node=1
