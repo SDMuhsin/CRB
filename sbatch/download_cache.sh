@@ -27,6 +27,14 @@ set -euo pipefail
 
 source ./env/bin/activate
 
+# Isolate the venv from $HOME/.local/lib/python*/site-packages — a stale
+# torchvision there, built against a different torch ABI, crashes any
+# transformers 5.x import with `RuntimeError: operator torchvision::nms
+# does not exist` (reported upstream as `Could not import module
+# 'Qwen3ForCausalLM'`). Setting this BEFORE the Qwen3 import check means
+# the whole pre-warm script sees the same env the sbatch jobs will.
+export PYTHONNOUSERSITE=1
+
 # ---------------------------------------------------------------------------
 # 1. Pick CACHE_ROOT — $SCRATCH on Alliance, ./downloads elsewhere.
 # ---------------------------------------------------------------------------
