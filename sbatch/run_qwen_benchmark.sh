@@ -277,7 +277,6 @@ for technique in "${techniques[@]}"; do
         if [[ "$CACHE_ROOT_LOCAL" != "$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
             ln -sfn "$CACHE_ROOT_LOCAL" ./downloads
         fi
-        export PYTHONNOUSERSITE=1
         export BILLM_BENCH_CSV="$CSV_ABS"
         export BILLM_DOWNLOADS_DIR="$CACHE_ROOT_LOCAL/downloads"
         export HF_HOME="$CACHE_ROOT_LOCAL/hf"
@@ -321,13 +320,11 @@ $account_line
 
 module load gcc arrow scipy-stack cuda cudnn
 source ./env/bin/activate
-
-# Isolate the venv from \$HOME/.local/lib/python*/site-packages. Without this,
-# a stale torchvision under ~/.local built against a different torch ABI
-# triggers \`RuntimeError: operator torchvision::nms does not exist\` the
-# moment transformers 5.x imports processing_utils, which is then reported as
-# \`ModuleNotFoundError: Could not import module 'Qwen3ForCausalLM'\`.
-export PYTHONNOUSERSITE=1
+# Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
+# tqdm / accelerate / typing_extensions from \$HOME/.local/. Do NOT set
+# PYTHONNOUSERSITE=1 here — it would break the import chain. The
+# torchvision/torchaudio ABI crash was fixed by uninstalling those two
+# specifically (./sbatch/fix_venv_torchvision.sh).
 
 # Route every cache to \$SCRATCH (1 TB soft / 20 TB hard on Nibi).
 # /project is code-only; \$HOME has only ~50 GiB. Falling back to defaults
