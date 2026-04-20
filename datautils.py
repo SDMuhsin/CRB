@@ -145,17 +145,37 @@ def get_c4_old(nsamples, seed, seqlen, model, tokenizer):
 def get_redpajama(nsamples, seed, seqlen, model, tokenizer):
     # RedPajama-Data-1T-Sample was removed from HuggingFace. Use C4 (same type
     # of web crawl data) with concatenation, following GuidedQuant's approach.
+    #
+    # We fetch ONE C4 shard via huggingface_hub.hf_hub_download and parse the
+    # JSON.gz lines directly — NOT via `datasets.load_dataset('allenai/c4',
+    # data_files=...)`. The latter's config-hash changes between online
+    # pre-warm and offline runtime (resolved URL differs), which breaks
+    # reuse of the cache. Direct file access is stable and reproducible.
+    from huggingface_hub import hf_hub_download
+    import gzip
+    import json as _json
+
     print("RedPajama unavailable on HF; using C4 web corpus as substitute...")
-    data = load_dataset(
-        'allenai/c4',
-        data_files={'train': 'en/c4-train.00000-of-01024.json.gz'},
-        split='train',
+    shard_path = hf_hub_download(
+        repo_id='allenai/c4',
+        filename='en/c4-train.00000-of-01024.json.gz',
+        repo_type='dataset',
+        cache_dir=downloads_dir,
     )
+    print(f"  C4 shard: {shard_path}")
+
+    texts = []
+    with gzip.open(shard_path, 'rt', encoding='utf-8') as f:
+        for line in f:
+            obj = _json.loads(line)
+            if 'text' in obj:
+                texts.append(obj['text'])
+    print(f"  {len(texts):,} documents loaded from shard")
 
     target_tokens = nsamples * seqlen * 3
-    max_docs = min(len(data), target_tokens // 150)
+    max_docs = min(len(texts), target_tokens // 150)
     print(f"  Tokenizing {max_docs} C4 documents...")
-    trainenc = tokenizer("\n\n".join(data['text'][:max_docs]), return_tensors='pt')
+    trainenc = tokenizer("\n\n".join(texts[:max_docs]), return_tensors='pt')
     total_tokens = trainenc.input_ids.shape[1]
     print(f"  {total_tokens:,} tokens from {max_docs} documents")
 

@@ -156,6 +156,12 @@ for model_name in models:
     AutoConfig.from_pretrained(model_name, cache_dir=cache_dir)
     AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
     print(f'  Tokenizer + config ready.')
+    # CRITICAL: a subsequent snapshot_download(local_files_only=True) is the
+    # only reliable way to guarantee refs/main has been written. Without this
+    # hf_hub_download(revision='main', local_files_only=True) can later fail
+    # with LocalEntryNotFoundError even though every file is on disk.
+    resolved = snapshot_download(repo_id=model_name, cache_dir=cache_dir, local_files_only=True)
+    print(f'  refs/main verified offline -> {resolved}')
 
 # Abort here if this transformers is too old for Qwen3 — catches wheelhouse
 # wheels that lack Qwen3ForCausalLM before any sbatch job is submitted.
@@ -187,19 +193,40 @@ echo ""
 echo "=== Downloading datasets ==="
 
 python -c "
+import os
 from datasets import load_dataset
+from huggingface_hub import hf_hub_download
 
 print('Downloading wikitext (wikitext-2-raw-v1)...')
 load_dataset('wikitext', 'wikitext-2-raw-v1')
 print('  Done: wikitext-2')
 
-print('Downloading allenai/c4 — single shard only (matches get_redpajama)...')
-ds = load_dataset(
-    'allenai/c4',
-    data_files={'train': 'en/c4-train.00000-of-01024.json.gz'},
-    split='train',
+# C4 shard — use hf_hub_download NOT load_dataset. The latter's config-hash
+# changes between online pre-warm and offline runtime (resolved URLs differ),
+# which made calibration jobs fail with 'Couldn't find cache for allenai/c4
+# for config default-...'. datautils.get_redpajama reads the .json.gz file
+# directly with gzip + json.loads — it just needs the raw blob present.
+print('Downloading allenai/c4 shard via hf_hub_download...')
+shard = hf_hub_download(
+    repo_id='allenai/c4',
+    filename='en/c4-train.00000-of-01024.json.gz',
+    repo_type='dataset',
+    cache_dir=os.environ['BILLM_DOWNLOADS_DIR'],
 )
-print(f'  Done: allenai/c4 (1 shard, {len(ds):,} rows)')
+print(f'  C4 shard: {shard}')
+print(f'  Size: {os.path.getsize(shard):,} bytes')
+
+# Mirror the Qwen3 refs/main verification for the C4 dataset repo — same
+# latent bug: without local_files_only=True follow-up, the revision ref may
+# not be written and offline resolution will fail.
+shard_offline = hf_hub_download(
+    repo_id='allenai/c4',
+    filename='en/c4-train.00000-of-01024.json.gz',
+    repo_type='dataset',
+    cache_dir=os.environ['BILLM_DOWNLOADS_DIR'],
+    local_files_only=True,
+)
+print(f'  C4 refs/main verified offline -> {shard_offline}')
 "
 
 echo ""
