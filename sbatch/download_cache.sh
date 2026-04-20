@@ -25,6 +25,9 @@
 
 set -euo pipefail
 
+# Module loads must precede venv activation — the venv's python symlink
+# resolves to the module-provided python/3.11 (via scipy-stack).
+module load gcc arrow scipy-stack cuda cudnn
 source ./env/bin/activate
 # Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
 # tqdm / accelerate / typing_extensions from $HOME/.local/. Do NOT set

@@ -9,6 +9,9 @@
 # ============================================================================
 
 set -u
+# Module loads must precede venv activation on Alliance Canada — the venv's
+# python symlink resolves to the module-provided python/3.11.
+module load gcc arrow scipy-stack cuda cudnn
 source ./env/bin/activate
 
 echo "============================================"
