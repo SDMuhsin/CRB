@@ -124,7 +124,7 @@ esac
 unset DL_REAL
 
 # ============================================================================
-# Models — Qwen3-0.6B is the target for this benchmark suite
+# Models — all four Qwen3 sizes in the benchmark suite (0.6B/1.7B/4B/8B)
 # ============================================================================
 #
 # IMPORTANT: write the model under \$BILLM_DOWNLOADS_DIR (cache_dir argument),
@@ -143,8 +143,13 @@ from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer, AutoConfig
 
 cache_dir = os.environ['BILLM_DOWNLOADS_DIR']
+# All four Qwen3 sizes covered by the Nibi benchmark suite. Adding any of
+# them requires a companion re-run of this script to populate refs/main.
 models = [
     'Qwen/Qwen3-0.6B',
+    'Qwen/Qwen3-1.7B',
+    'Qwen/Qwen3-4B',
+    'Qwen/Qwen3-8B',
 ]
 
 for model_name in models:
