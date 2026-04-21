@@ -16,6 +16,10 @@
 #     sinq          SINQ, nbits=2, group_size=64   (~2.51 bpw)
 #     lnq           GuidedQuant/LNQ faithful: redpajama/1024/4096,
 #                   no_propagate, num_groups=4     (~2.03 bpw)
+#     leanquant-nu  LeanQuant_nu faithful: per-row weighted k-means over
+#                   diag(Hinv)^(-p=4) + GPTQ, redpajama/128/2048,
+#                   act_order + true_sequential + propagate
+#                                                   (~2.05 bpw)
 #     tesseraq      TesseraQ, bit=2, 250 optim iters (~2.25 bpw)
 #     pb-llm        PB-LLM partial binarization: xnor, low_frac=0.9,
 #                   high_bit=8 (~1.7 bpw — closest PB-LLM config to 2 bit)
@@ -97,6 +101,7 @@ CSV_ABS="$(pwd)/results/$CSV_NAME"
 #   mi300a, a100, a5000, t4
 GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
 GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
+GPU_LARGE="--gres=gpu:nvidia_h100_80gb_hbm3_3g.40gb:1"    # 40 GB MIG — for lnq (Fisher + 1024×4096 saliency Hessians)
 
 # Shared quantization hyperparameters (match existing BiLLM2 defaults /
 # published best settings for fair cross-method comparison at 2 bits).
@@ -107,6 +112,13 @@ LNQ_NSAMPLES=1024
 LNQ_SEQLEN=4096
 LNQ_NUM_GROUPS=4
 LNQ_NBITS=2
+# LeanQuant_nu — paper-faithful settings (arXiv:2407.10032, README 2-bit recipe)
+LEANQUANT_CALIB="redpajama"     # same C4 shard the paper uses
+LEANQUANT_NSAMPLES=128
+LEANQUANT_SEQLEN=2048
+LEANQUANT_NBITS=2
+LEANQUANT_EXPONENT=4.0          # p in sample_weight = diag(Hinv)^(-p)
+LEANQUANT_PERCDAMP=0.1          # README's 2-bit recipe
 SINQ_NBITS=2
 SINQ_GROUPSIZE=64
 TESSERAQ_BIT=2
@@ -123,7 +135,8 @@ techniques=(
     #"gptq-2bit"
     #"sinq"
     "lnq"
-    #"tesseraq"
+    "leanquant-nu"
+    "tesseraq"
     #"pb-llm"
     #"doml"
     #"doml-binary"
@@ -140,10 +153,30 @@ get_job_resources() {
     # except LNQ (1024×4096 activations + Fisher grads) and TesseraQ
     # (250 iters with backward pass), which want 2g.20gb.
     case $1 in
-        lnq|tesseraq)
+        lnq)
+            # 2g.20gb was insufficient: job 12504042 died with CUDA OOM at
+            # Qwen3-0.6B Layer-1 attention-softmax (19.62 GB cap, 15.19 GB in
+            # use, tried to alloc 1024 MiB for attn_weights fp32 softmax).
+            # The faithful Phase-8 config (redpajama / 1024 × 4096 / Fisher
+            # gradients + 4-group saliency Hessian + full-seqlen activations)
+            # needs ≥ ~25 GB peak. 3g.40gb gives 40 GB headroom.
+            gpu_resource="$GPU_LARGE"
+            cpus=8
+            mem="48G"
+            ;;
+        tesseraq)
             gpu_resource="$GPU_MEDIUM"
             cpus=8
             mem="32G"
+            ;;
+        leanquant-nu)
+            # 128×2048 activations (~512 MB on 0.6B) + per-row weighted k-means
+            # fit comfortably on 1g.10gb. Keeps CPU count higher than DOML —
+            # k-means is GPU-vectorised but CPU is used for calibration
+            # pre-tokenisation (flock-serialised against the shared cache).
+            gpu_resource="$GPU_SMALL"
+            cpus=4
+            mem="16G"
             ;;
         *)
             gpu_resource="$GPU_SMALL"
@@ -166,8 +199,9 @@ get_time_limit() {
         doml)         echo "00:50:00" ;;  # 2-bit DOML — flagship method
         doml-binary)  echo "00:50:00" ;;  # 1-bit variant
         braq)         echo "00:50:00" ;;
-        tesseraq)     echo "02:30:00" ;;  # 250 optim iters
+        tesseraq)     echo "05:00:00" ;;  # 250 optim iters — job 12501759 hit 2h30m TIME LIMIT at block 21/28 step 17/20
         lnq)          echo "04:00:00" ;;  # Fisher + saliency + LNQ refine
+        leanquant-nu) echo "00:50:00" ;;  # measured 8.7 min on A40, 3-4x slower on 1g.10gb H100 MIG
         *)            echo "01:00:00" ;;
     esac
 }
@@ -210,6 +244,12 @@ build_python_cmd() {
         lnq)
             echo "python3 -u src/run_lnq.py $MODEL $DATASET --full_pipeline --no_propagate --calib_dataset $LNQ_CALIB --nsamples $LNQ_NSAMPLES --seqlen $LNQ_SEQLEN --num_groups $LNQ_NUM_GROUPS --nbits $LNQ_NBITS --seed $SEED --device cuda:0 $common_evals"
             ;;
+        leanquant-nu)
+            # Paper Algorithm 1: per-row weighted k-means over diag(Hinv)^(-p)
+            # + block-wise GPTQ. act_order + true_sequential + propagate match
+            # the README's 2-bit recipe; csv_utils writes method="leanquant_nu".
+            echo "python3 -u src/run_leanquant.py $MODEL $DATASET --nbits $LEANQUANT_NBITS --exponent $LEANQUANT_EXPONENT --percdamp $LEANQUANT_PERCDAMP --true_sequential --act_order --calib_dataset $LEANQUANT_CALIB --nsamples $LEANQUANT_NSAMPLES --seqlen $LEANQUANT_SEQLEN --seed $SEED --device cuda:0 $common_evals"
+            ;;
         pb-llm)
             # PB-LLM has its own runner under PB-LLM/gptq_pb/run.py; it sets
             # PYTHONPATH internally to find ../../src/csv_utils.
@@ -228,6 +268,7 @@ get_technique_desc() {
         gptq-2bit)    echo "GPTQ @ 2-bit (blocksize=$BLOCKSIZE, salient=$SALIENT_METRIC)"   ;;
         sinq)         echo "SINQ (nbits=$SINQ_NBITS, group_size=$SINQ_GROUPSIZE)"           ;;
         lnq)          echo "GuidedQuant/LNQ (nbits=$LNQ_NBITS, $LNQ_CALIB/$LNQ_NSAMPLES/$LNQ_SEQLEN, groups=$LNQ_NUM_GROUPS, no_propagate)" ;;
+        leanquant-nu) echo "LeanQuant_nu (nbits=$LEANQUANT_NBITS, p=$LEANQUANT_EXPONENT, percdamp=$LEANQUANT_PERCDAMP, $LEANQUANT_CALIB/$LEANQUANT_NSAMPLES/$LEANQUANT_SEQLEN, act_order+true_sequential)" ;;
         tesseraq)     echo "TesseraQ (bit=$TESSERAQ_BIT, gs=$TESSERAQ_GROUPSIZE, iters=$TESSERAQ_ITERATIONS)" ;;
         pb-llm)       echo "PB-LLM ($PBLLM_METHOD, low_frac=$PBLLM_LOW_FRAC, high_bit=$PBLLM_HIGH_BIT, blocksize=$BLOCKSIZE)" ;;
         doml)         echo "DOML (K=4, Lloyd-Max + GPTQ + structural partition, salient=$SALIENT_METRIC)" ;;
@@ -415,6 +456,20 @@ ls -d "\$BILLM_DOWNLOADS_DIR"/models--*Qwen3* 2>/dev/null || {
     echo "FATAL: no Qwen3 snapshot under \$BILLM_DOWNLOADS_DIR — run ./sbatch/download_cache.sh first."
     exit 1
 }
+# Verify refs/main was written. Without this file, \`AutoModelForCausalLM.from_pretrained\`
+# under HF_HUB_OFFLINE=1 can raise LocalEntryNotFoundError for config.json
+# (observed: job 12501760 pb-llm, 2026-04-20 13:08 — cache downloaded Apr 16,
+# refs/main not written until Apr 20 14:05 when the snapshot_download
+# local_files_only=True fix landed in download_cache.sh). Fail loud early
+# rather than burn GPU time just to die at model load.
+for _refs in "\$BILLM_DOWNLOADS_DIR"/models--*Qwen3*/refs/main; do
+    [ -s "\$_refs" ] || {
+        echo "FATAL: \$_refs missing or empty."
+        echo "       Re-run ./sbatch/download_cache.sh (commit 6d7eb56 or later — must do"
+        echo "       snapshot_download(..., local_files_only=True) as second pass)."
+        exit 1
+    }
+done
 nvidia-smi || true
 $python_cmd
 echo '========================================'

@@ -1,0 +1,128 @@
+========================================
+Job:        qwen3_06b_sinq
+Model:      Qwen/Qwen3-0.6B
+Technique:  sinq
+Config:     SINQ (nbits=2, group_size=64)
+Dataset:    wikitext2
+Seed:       0
+Time limit: 00:40:00
+GPU:        --gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1
+CPUs / Mem: 4 / 16G
+CSV:        /home/sdmuhsin/projects/def-seokbum/sdmuhsin/CRB/results/qwen3_06b_ptq_benchmark.csv
+Cache root: /scratch/sdmuhsin/billm2_cache (/scratch/sdmuhsin/billm2_cache/hf)
+TMPDIR:     /local/scratch/sdmuhsin.12501756.0
+Started:    Mon Apr 20 13:07:24 EDT 2026
+SLURM job:  12501756
+========================================
+Python:             /project/6010289/sdmuhsin/CRB/env/bin/python
+Python 3.11.5
+CUDA_VISIBLE_DEVICES=MIG-81e319ac-35e3-584c-9cb6-da77a3ea222e
+transformers 5.5.4
+/scratch/sdmuhsin/billm2_cache/downloads/models--Qwen--Qwen3-0.6B
+Mon Apr 20 13:08:05 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.82.07              Driver Version: 580.82.07      CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:3B:00.0 Off |                   On |
+| N/A   30C    P0             69W /  700W |     105MiB /  81559MiB |     N/A      Default |
+|                                         |                        |              Enabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| MIG devices:                                                                            |
++------------------+----------------------------------+-----------+-----------------------+
+| GPU  GI  CI  MIG |              Shared Memory-Usage |        Vol|        Shared         |
+|      ID  ID  Dev |                Shared BAR1-Usage | SM     Unc| CE ENC  DEC  OFA  JPG |
+|                  |                                  |        ECC|                       |
+|==================+==================================+===========+=======================|
+|  0    9   0   0  |              15MiB /  9984MiB    | 16      0 |  1   0    1    0    1 |
+|                  |               0MiB /  6185MiB    |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+Loading model: Qwen/Qwen3-0.6B
+
+============================================================
+SINQ W2 g64 Quantization (calibration-free)
+Linear layers to quantize: 196
+============================================================
+
+  [10/196] model.layers.1.self_attn.v_proj: (1024x1024), MSE=0.000171, relErr=0.4601, 0.06s
+  [20/196] model.layers.2.mlp.up_proj: (3072x1024), MSE=0.000119, relErr=0.4608, 0.06s
+  [30/196] model.layers.4.self_attn.k_proj: (1024x1024), MSE=0.000168, relErr=0.4595, 0.06s
+  [40/196] model.layers.5.mlp.gate_proj: (3072x1024), MSE=0.000249, relErr=0.4581, 0.06s
+  [50/196] model.layers.7.self_attn.q_proj: (2048x1024), MSE=0.000175, relErr=0.4597, 0.06s
+  [60/196] model.layers.8.self_attn.o_proj: (1024x2048), MSE=0.000129, relErr=0.4587, 0.12s
+  [70/196] model.layers.9.mlp.down_proj: (1024x3072), MSE=0.000129, relErr=0.4645, 0.18s
+  [80/196] model.layers.11.self_attn.v_proj: (1024x1024), MSE=0.000144, relErr=0.4679, 0.06s
+  [90/196] model.layers.12.mlp.up_proj: (3072x1024), MSE=0.000151, relErr=0.4612, 0.06s
+  [100/196] model.layers.14.self_attn.k_proj: (1024x1024), MSE=0.000125, relErr=0.4631, 0.06s
+  [110/196] model.layers.15.mlp.gate_proj: (3072x1024), MSE=0.000160, relErr=0.4621, 0.06s
+  [120/196] model.layers.17.self_attn.q_proj: (2048x1024), MSE=0.000187, relErr=0.4600, 0.06s
+  [130/196] model.layers.18.self_attn.o_proj: (1024x2048), MSE=0.000103, relErr=0.4591, 0.12s
+  [140/196] model.layers.19.mlp.down_proj: (1024x3072), MSE=0.000154, relErr=0.4677, 0.18s
+  [150/196] model.layers.21.self_attn.v_proj: (1024x1024), MSE=0.000178, relErr=0.4627, 0.06s
+  [160/196] model.layers.22.mlp.up_proj: (3072x1024), MSE=0.000236, relErr=0.4617, 0.06s
+  [170/196] model.layers.24.self_attn.k_proj: (1024x1024), MSE=0.000139, relErr=0.4653, 0.06s
+  [180/196] model.layers.25.mlp.gate_proj: (3072x1024), MSE=0.000170, relErr=0.4598, 0.07s
+  [190/196] model.layers.27.self_attn.q_proj: (2048x1024), MSE=0.000199, relErr=0.4590, 0.06s
+  [196/196] model.layers.27.mlp.down_proj: (1024x3072), MSE=0.000154, relErr=0.4598, 0.18s
+
+Total quantization time: 22.7s
+Total parameters quantized: 440,401,920
+
+============================================================
+Evaluating perplexity on wikitext2...
+============================================================
+Evaluating (Qwen) ...
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+Perplexity: 275554.531250
+{'wikitext2/perplexity': 275554.53125}
+
+============================================================
+RESULT: SINQ W2g64 on Qwen3-0.6B
+  wikitext2 PPL: 275554.53
+  Seed: 0
+  Effective bpw: ~2.51
+  Quantization time: 22.7s
+============================================================
+========================================
+Finished:   Mon Apr 20 13:09:47 EDT 2026
+========================================
