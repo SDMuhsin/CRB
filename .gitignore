@@ -20,4 +20,9 @@ llmdocs
 test*
 *.bib
 *.tex
+result
+
+
+
+logs
 results
