@@ -83,14 +83,18 @@ CSV_ABS="$(pwd)/results/$CSV_NAME"
 # Nibi GRES strings. Full long-form MIG names are REQUIRED — short forms
 # like `1g.10gb` are rejected (see Gotcha #11 in CONTEXT.md).
 #   h100                            (full 80 GB H100)
-#   nvidia_h100_80gb_hbm3_4g.40gb   (4/8 compute, 40 GB)
 #   nvidia_h100_80gb_hbm3_3g.40gb   (3/8 compute, 40 GB)
 #   nvidia_h100_80gb_hbm3_2g.20gb   (2/8 compute, 20 GB)
 #   nvidia_h100_80gb_hbm3_1g.10gb   (1/8 compute, 10 GB)
+# NOTE (2026-04-21): 4g.40gb was expected per the CC MIG catalogue but is
+# NOT provisioned on Nibi. sinfo confirms only 1g.10gb/2g.20gb/3g.40gb and
+# full h100 are advertised. Jobs that request 4g.40gb FAIL instantly with
+# ExitCode=1:0, Elapsed=00:00:00, and no .out/.err written (silent
+# unsatisfiable-gres rejection). Killed jobs 12539876/12539886/12539888.
 GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
 GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
 GPU_LARGE="--gres=gpu:nvidia_h100_80gb_hbm3_3g.40gb:1"
-GPU_XLARGE="--gres=gpu:nvidia_h100_80gb_hbm3_4g.40gb:1"  # 4/8 compute, 40 GB — TesseraQ backward scaling
+GPU_FULL="--gres=gpu:h100:1"                             # full 80 GB H100 — tesseraq compute driver
 
 # Shared quantization hyperparameters (match existing BiLLM2 defaults /
 # published best settings for fair cross-method comparison at 2 bits).
@@ -118,18 +122,22 @@ PBLLM_LOW_FRAC=0.9
 PBLLM_HIGH_BIT=8
 
 # Methods to benchmark — one sbatch job per entry.
+# Pared down 2026-04-21 to ONLY the methods that still need a result for
+# Qwen3-1.7B. See ./results/qwen3_1.7b_ptq_benchmark.csv for what already
+# landed from the 12539xxx batch. Uncomment a line to re-queue that method.
 techniques=(
-    "fp16"
-    "rtn-2bit"
-    "gptq-2bit"
-    "sinq"
-    "lnq"
-    "leanquant-nu"
-    "tesseraq"
-    "pb-llm"
-    "doml"
-    "doml-binary"
-    "braq"
+    # "fp16"          # job 12539870 COMPLETED, PPL 16.72
+    # "rtn-2bit"      # job 12539871 COMPLETED, PPL 4.64M (quality collapse, not a crash)
+    # "gptq-2bit"     # job 12539872 COMPLETED, PPL 156k  (quality collapse, not a crash)
+    # "sinq"          # job 12539873 COMPLETED, PPL 30,930
+    # "lnq"           # job 12539874 currently RUNNING on 3g.40gb — do NOT re-queue
+    # "leanquant-nu"  # job 12539875 COMPLETED, PPL 128.81
+    "tesseraq"      # job 12539876 FAILED (unsatisfiable GPU_XLARGE=4g.40gb); MIG fix applied, re-run
+    "pb-llm"        # job 12539877 FAILED in Python (LocalEntryNotFoundError); root cause TBD —
+                    # don't actually re-queue until diagnose_pb_llm_compute.sh returns a fix.
+    # "doml"          # job 12539878 COMPLETED, PPL 35.01
+    # "doml-binary"   # job 12539879 COMPLETED, PPL 42,639
+    # "braq"          # job 12539880 COMPLETED, PPL 124k
 )
 
 # ============================================================================
@@ -158,10 +166,11 @@ get_job_resources() {
             ;;
         tesseraq)
             # 0.6B TesseraQ needed 5h on 2g.20gb (Phase 11). 1.7B with 3×
-            # the block-size and wider MLP scales ~3-5× compute. Even 4g.40gb
-            # (2× 2g.20gb compute) leaves 1.7B at ~7-12 h. We budget 10 h
-            # below; if it TIME LIMITs we will retry on full h100.
-            gpu_resource="$GPU_XLARGE"
+            # the block-size and wider MLP scales ~3-5× compute. The
+            # previous 4g.40gb plan does not schedule on Nibi (see GPU
+            # table note above), so go straight to full h100 — 8× compute
+            # of 2g.20gb finishes the same work in ~2-3 h.
+            gpu_resource="$GPU_FULL"
             cpus=8
             mem="32G"
             ;;
@@ -203,8 +212,8 @@ get_time_limit() {
         doml)         echo "01:30:00" ;;  # 0.6B Nibi 450s × 1.66 = 747s = 12.5 min
         doml-binary)  echo "01:30:00" ;;  # K=2 variant — same cost envelope as DOML
         braq)         echo "01:30:00" ;;  # 0.6B Nibi 432s × 1.66 = 717s = 12 min
-        tesseraq)     echo "10:00:00" ;;  # 0.6B Nibi >150 min on 2g.20gb before TIME LIMIT;
-                                          # 1.7B ~3-5× deeper on 4g.40gb (2× compute) ⇒ 6-8 h
+        tesseraq)     echo "05:00:00" ;;  # 0.6B Nibi >150 min on 2g.20gb before TIME LIMIT;
+                                          # 1.7B on full h100 (8× 2g.20gb compute) ⇒ ~2-3 h; 5 h buffer
         lnq)          echo "08:00:00" ;;  # Fisher (~1024 × ~3s/sample on 1.7B = 50 min)
                                           # + saliency Hessian (~50 min) + LNQ optimize
                                           # (33 min on dev-box A40 Phase-6 core only) × 1.5

@@ -18,7 +18,7 @@
 #      the model and leaves nothing for activations. Bumped base slice to
 #      3g.40gb (40 GB) for every method.
 #   2. LNQ Fisher computation peaks at 42 GB on A40 (measured Phase 8).
-#      Even 4g.40gb (40 GB) is insufficient ⇒ must use full h100 (80 GB).
+#      40 GB MIG slices (3g.40gb) are insufficient ⇒ must use full h100 (80 GB).
 #   3. LNQ 1024 samples × 4096 seqlen exceeds 125 GB system RAM on 8B
 #      (Phase 8 OOM'd at layer 32/35). Use 512 samples for 8B.
 #      (CONTEXT.md "Setup": must use 512 samples for 8B GuidedQuant.)
@@ -96,7 +96,11 @@ CSV_ABS="$(pwd)/results/$CSV_NAME"
 GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
 GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
 GPU_LARGE="--gres=gpu:nvidia_h100_80gb_hbm3_3g.40gb:1"
-GPU_XLARGE="--gres=gpu:nvidia_h100_80gb_hbm3_4g.40gb:1"
+# NOTE (2026-04-21): 4g.40gb MIG is NOT provisioned on Nibi — sinfo lists
+# only 1g.10gb/2g.20gb/3g.40gb and full h100. 4g.40gb requests fail
+# silently (no .out/.err, ExitCode=1:0, Elapsed=0s). The 8B pipeline never
+# used GPU_XLARGE in gpu_resource= anyway — everything lives on GPU_LARGE
+# or GPU_FULL — so the removal is mechanical.
 GPU_FULL="--gres=gpu:h100:1"                              # full 80 GB H100
 
 # Shared quantization hyperparameters.
@@ -158,9 +162,8 @@ get_job_resources() {
                                 # Fisher (32 GB fp16) + saliency buffers.
             ;;
         tesseraq)
-            # 8B TesseraQ on 4g.40gb would be ~24 h. Full h100 (~3.5×
-            # compute of 2g.20gb, 2× 4g.40gb) brings it down to ~14 h.
-            # Peak GPU ~28-32 GB.
+            # 8B TesseraQ on 3g.40gb would be ~30 h. Full h100 (~2.7×
+            # compute of 3g.40gb) brings it down to ~11 h. Peak GPU ~28-32 GB.
             gpu_resource="$GPU_FULL"
             cpus=12
             mem="64G"
