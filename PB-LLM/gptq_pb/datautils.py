@@ -11,7 +11,7 @@ def set_seed(seed):
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-downloads_dir = "./downloads"
+downloads_dir = os.environ.get("BILLM_DOWNLOADS_DIR", "./downloads")
 
 '''
 Generate tokenizer and return it to preload datasets by converting them to embedded vectors instead of natural words

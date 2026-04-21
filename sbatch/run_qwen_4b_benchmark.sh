@@ -129,11 +129,11 @@ techniques=(
     # "rtn-2bit"      # job 12539883 COMPLETED, PPL 256,762 (quality collapse)
     # "gptq-2bit"     # job 12539884 COMPLETED, PPL 692.9    (quality collapse)
     # "sinq"          # job 12539885 COMPLETED, PPL 131,113  (quality collapse)
-    "lnq"           # job 12539886 FAILED (unsatisfiable GPU_XLARGE=4g.40gb); MIG fix: now 3g.40gb
+    # "lnq"         # job 12547271 currently RUNNING on 3g.40gb (MIG fix) — do NOT re-queue
     # "leanquant-nu"  # job 12539887 COMPLETED, PPL 45.83
-    "tesseraq"      # job 12539888 FAILED (unsatisfiable GPU_XLARGE=4g.40gb); MIG fix: now full h100
-    "pb-llm"        # job 12539889 FAILED in Python (LocalEntryNotFoundError); root cause TBD —
-                    # don't actually re-queue until diagnose_pb_llm_compute.sh returns a fix.
+    # "tesseraq"    # job 12547272 currently RUNNING on full h100 (MIG fix) — do NOT re-queue
+    "pb-llm"        # job 12547273 FAILED (star-import clobbered BILLM_DOWNLOADS_DIR); fixed in
+                    # PB-LLM/gptq_pb/datautils.py — ready to re-submit.
     # "doml"          # job 12539890 COMPLETED, PPL 15.84
     # "doml-binary"   # job 12539891 COMPLETED, PPL 1,634
     # "braq"          # job 12539892 COMPLETED, PPL 357.3
