@@ -132,11 +132,11 @@ PBLLM_HIGH_BIT=8                # high-precision tier bit width
 
 # Methods to benchmark — one sbatch job per entry.
 techniques=(
-    "fp16"
+    #"fp16"
     #"rtn-2bit"
-    "gptq-2bit"
+    #"gptq-2bit"
     #"sinq"
-    "lnq"
+    #"lnq"
     #"leanquant-nu"
     #"tesseraq"
     "pb-llm"
