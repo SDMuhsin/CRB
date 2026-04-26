@@ -239,6 +239,29 @@ def quant_sequential(model, dataloader, dev):
 
 if __name__ == "__main__":
     import argparse
+
+    # Phase 16 (2026-04-26): pb-llm job 12817162 had c4 + ptb FAILED rows in
+    # the CSV. Root cause: this `from datautils import *` resolved to PB-LLM's
+    # LOCAL datautils.py because sys.path[0] = this script's directory at
+    # interpreter launch. PB-LLM's local datautils.get_c4 / get_ptb still call
+    # `load_dataset('allenai/c4', ...)` and `load_dataset('ptb_text_only', ...)`
+    # which fail under HF_HUB_OFFLINE=1 (Phase-15 fixed this in the project-
+    # root datautils.py only). The shadowed `datautils` module then leaks into
+    # `eval_utils._eval_ppl_one` (which does `from datautils import get_loaders`),
+    # so PPL eval for c4 + ptb fails too — see traceback in
+    # logs/qwen3_06b_pb-llm_12817162.err.
+    #
+    # Fix: prepend the project root to sys.path BEFORE the star-import so
+    # `datautils` resolves to the project-root datautils.py (offline-friendly
+    # get_c4 via hf_hub_download + get_ptb via Mikolov text files + fcntl
+    # cache lock). PB-LLM's local datautils.py becomes orphaned for this
+    # invocation; root is a strict superset (same get_loaders signature, all
+    # functions PB-LLM uses, plus get_redpajama and the Phase-15 offline
+    # paths).
+    import sys as _sys, os as _os
+    _project_root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
+    if _project_root not in _sys.path:
+        _sys.path.insert(0, _project_root)
     from datautils import *
 
     parser = argparse.ArgumentParser()
