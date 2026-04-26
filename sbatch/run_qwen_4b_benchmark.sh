@@ -148,44 +148,59 @@ techniques=(
 get_job_resources() {
     # Qwen3-4B baseline slice is 2g.20gb because the 8.3 GB model + any
     # non-trivial activations will not fit in 1g.10gb (10 GB).
+    #
+    # Phase 16 (2026-04-26): generous bump applied uniformly. The 0.6B
+    # tesseraq OOM (job 12795327, 48 GB cgroup) demonstrated that the
+    # previous "tight estimate then +50%" budgets are not safe at the
+    # Phase-14B `nsamples=512` settings. 4B has roughly 2.5× the per-
+    # sample AWQ memory of 1.7B (hidden 2048 → 2560 with deeper net),
+    # so tesseraq RAM bumped 96 → 256 GB. PB-LLM promoted 2g → 3g.40gb.
+    # Default methods stay on 2g.20gb (fits comfortably).
     case $1 in
         lnq)
             # Fisher grads (8 GB fp16) + saliency Hessian + 1024×4096 peak
             # attn = ~25-30 GB expected. 3g.40gb (40 GB MIG) fits — same
             # slice the currently-running 1.7B lnq (12539874) uses. Memory-
             # bound so 3/8 vs 4/8 compute doesn't change the schedule much.
+            # Phase 16: host RAM 96 → 128 GB, walltime 20 → 24 h.
             gpu_resource="$GPU_LARGE"
             cpus=10
-            mem="96G"
+            mem="128G"
             ;;
         tesseraq)
             # Paper-exact TesseraQ on 4B (iter=250, bsz=4, nsamples=512).
-            # CPU peak: 512-sample input_feat caches (4 subsets × ~5 GB each ~=
-            # 20 GB) + FP32 targets per block (~5 GB) + model (~16 GB) = ~45 GB.
-            # Use full h100 for GPU compute; bump --mem to 96 GB to leave
-            # headroom for Python/PyTorch allocator + HF caches.
+            # 0.6B reference (job 12795327) OOM-killed at 48 GB; the prior
+            # "~45 GB" estimate for 4B was directly extrapolated from that
+            # bad estimate. Real 0.6B peak was >48 GB; 4B AWQ-init peak
+            # scales with hidden² (~2.5×) plus FP32 promotion of bigger
+            # blocks plus per-sample input_feat caches. Budget 256 GB
+            # conservatively (Nibi nodes have 768 GB/node).
             gpu_resource="$GPU_FULL"
             cpus=12
-            mem="96G"
+            mem="256G"
             ;;
         leanquant-nu)
             # 128×2048 at 4B peaks ~13 GB GPU; 2g.20gb fits with margin.
+            # Phase 16: host RAM 32 → 48 GB.
             gpu_resource="$GPU_MEDIUM"
             cpus=6
-            mem="32G"
+            mem="48G"
             ;;
         pb-llm)
             # PB-LLM keeps fp16 outliers + GPTQ Hessians. Peak ~14 GB on 4B.
-            gpu_resource="$GPU_MEDIUM"
+            # Phase 16: promote 2g.20gb → 3g.40gb (PB-LLM has Phase-13
+            # crash history; remove ambiguity), RAM 32 → 64 GB.
+            gpu_resource="$GPU_LARGE"
             cpus=6
-            mem="32G"
+            mem="64G"
             ;;
         *)
             # fp16, rtn-2bit, gptq-2bit, sinq, doml, doml-binary, braq
             # Peaks 11-14 GB on 4B ⇒ 2g.20gb fits.
+            # Phase 16: host RAM 32 → 48 GB.
             gpu_resource="$GPU_MEDIUM"
             cpus=6
-            mem="32G"
+            mem="48G"
             ;;
     esac
 }
@@ -194,19 +209,23 @@ get_time_limit() {
     # Phase 15 update: budgets include the full eval suite (3 PPL +
     # MMLU + HellaSwag + ARC-Easy + ARC-Challenge). On 4B the eval
     # addition is ~1.5-3 h. All "fast" baselines bumped to 4 h.
+    # Phase 16 update: +30-50% walltime margin on every method.
+    # Alliance Nibi partition tiers: b1≤3h, b2≤12h, b3≤24h, b4≤72h,
+    # b5≤168h. Walltimes nudged off tier boundaries so SLURM routes
+    # unambiguously to the next-larger bucket.
     case $1 in
-        fp16)         echo "04:00:00" ;;  # eval-suite-dominated for FP16
-        rtn-2bit)     echo "04:00:00" ;;
-        gptq-2bit)    echo "04:30:00" ;;
-        sinq)         echo "04:00:00" ;;  # 0.6B Nibi 22s × 4.22 = ~93s; eval suite drives
-        pb-llm)       echo "05:30:00" ;;  # PB-LLM backward pass on top of GPTQ
-        doml)         echo "06:00:00" ;;  # 92 min quant + ~3 h evals + margin
-        doml-binary)  echo "06:00:00" ;;  # K=2 same envelope as DOML
-        braq)         echo "06:00:00" ;;
-        tesseraq)     echo "38:00:00" ;;  # 36 h quant + 2 h evals
-        lnq)          echo "20:00:00" ;;  # 18 h Fisher/saliency/refine + 2 h evals
-        leanquant-nu) echo "04:00:00" ;;  # ~55 min quant + ~3 h evals + margin
-        *)            echo "04:00:00" ;;
+        fp16)         echo "05:30:00" ;;  # b2 — eval-suite-dominated for FP16
+        rtn-2bit)     echo "05:30:00" ;;  # b2
+        gptq-2bit)    echo "06:30:00" ;;  # b2
+        sinq)         echo "05:30:00" ;;  # b2 — 0.6B Nibi 22s × 4.22 = ~93s; eval suite drives
+        pb-llm)       echo "07:30:00" ;;  # b2 — PB-LLM backward pass on top of GPTQ
+        doml)         echo "08:00:00" ;;  # b2 — 92 min quant + ~3 h evals + margin
+        doml-binary)  echo "08:00:00" ;;  # b2 — K=2 same envelope as DOML
+        braq)         echo "08:00:00" ;;  # b2
+        tesseraq)     echo "48:00:00" ;;  # b4 — 46 h quant + 2 h evals (was 38 h)
+        lnq)          echo "26:00:00" ;;  # b4 — 22 h Fisher/saliency/refine + 4 h margin (off b3/b4 boundary)
+        leanquant-nu) echo "06:00:00" ;;  # b2 — ~55 min quant + ~3 h evals + margin
+        *)            echo "06:00:00" ;;
     esac
 }
 

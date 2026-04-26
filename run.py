@@ -948,18 +948,40 @@ if __name__ == "__main__":
     save_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}"
     save_file = "./output/" + save_title.replace("/", "_") + ".pt"
 
+    # Phase 16 (2026-04-26): the generic '2bit' / '3bit' / '4bit' methods
+    # need disambiguation in the CSV. The sbatch jobs `rtn-2bit` (2bit +
+    # --disable_gptq) and `gptq-2bit` (2bit + --partition 1 --global_scale)
+    # used to both land as method="2bit", making CSV rows non-self-
+    # describing. Resolve to a more specific tag based on flags. The
+    # default partition=3 path (no --disable_gptq, no --global_scale)
+    # is the DOML-uniform ablation per Phase-14 finding and keeps the
+    # base tag.
+    def _resolve_csv_method(_args):
+        base = _args.low_quant_method
+        if base in ("2bit", "3bit", "4bit"):
+            if _args.disable_gptq:
+                return f"rtn-{base}"
+            if getattr(_args, "partition", 3) == 1 and getattr(_args, "global_scale", False):
+                return f"gptq-{base}"
+        return base
+
+    csv_method = _resolve_csv_method(args)
+
     # BPW lookup for CSV output
     _bpw_map = {
         'fp16': 16, 'rtn': 1.07, '2bit': 2.0, 'braq': 1.07,
         'crbog': 1.07, 'doml': 2.09, 'doml_binary': 1.07, 'ternary': 1.58,
+        # Phase 16 disambiguated tags — same numeric bpw as base
+        'rtn-2bit': 2.0, 'rtn-3bit': 3.0, 'rtn-4bit': 4.0,
+        'gptq-2bit': 2.0, 'gptq-3bit': 3.0, 'gptq-4bit': 4.0,
     }
-    _run_bpw = _bpw_map.get(args.low_quant_method, '')
+    _run_bpw = _bpw_map.get(csv_method, '')
     _quant_time = 0.0
 
     # CSV helper
     def _csv(dataset, metric, value, notes=""):
         _csv_append(
-            model=args.model, method=args.low_quant_method, dataset=dataset,
+            model=args.model, method=csv_method, dataset=dataset,
             metric=metric, value=value, bpw=_run_bpw, seed=args.seed,
             blocksize=groupsize, salient_metric=args.salient_metric,
             extra_params=None, quantization_time_s=_quant_time, notes=notes,
@@ -1024,7 +1046,7 @@ if __name__ == "__main__":
     eval_flags = resolve_eval_flags(args, primary_dataset=args.dataset)
     evaluate_and_log_all(
         model, args.model, device,
-        method=args.low_quant_method,
+        method=csv_method,
         bpw=_run_bpw, seed=args.seed, blocksize=groupsize,
         salient_metric=args.salient_metric,
         extra_params={"corr_damp": args.corr_damp, "lam": args.lam,

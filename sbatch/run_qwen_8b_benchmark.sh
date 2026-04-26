@@ -151,54 +151,68 @@ techniques=(
 
 get_job_resources() {
     # 8B model alone is 16.38 GB. Base slice is 3g.40gb (40 GB) for every
-    # method; LNQ escalates to full h100 (80 GB) for Fisher headroom.
+    # method; LNQ + tesseraq escalate to full h100 (80 GB).
+    #
+    # Phase 16 (2026-04-26): generous bump applied uniformly. The 0.6B
+    # tesseraq OOM (job 12795327, 48 GB cgroup) showed prior estimates
+    # were wrong by at least 2×. 8B has ~4× the per-sample AWQ memory
+    # of 0.6B (hidden 1024 → 4096) — so tesseraq RAM bumped 160 → 400 GB
+    # (Nibi nodes have 768 GB/node, so this is not extreme). LNQ RAM
+    # bumped 180 → 240 GB. PB-LLM RAM doubled (48 → 96 GB). Default
+    # methods bumped 48 → 64 GB.
     case $1 in
         lnq)
             # Fisher peaks ~42 GB (A40 measured, Phase 8). 4g.40gb would
             # be insufficient even at 512 samples — must use full h100
             # (80 GB MIG-free). 768 GB/node RAM allows generous --mem.
+            # Phase 16: host RAM 180 → 240 GB, walltime 14 → 20 h.
             gpu_resource="$GPU_FULL"
             cpus=16
-            mem="180G"          # 512 samples × 4096 × 4096 × 2 bytes = 16 GB
-                                # CPU-offloaded activations per layer; plus
-                                # Fisher (32 GB fp16) + saliency buffers.
+            mem="240G"
             ;;
         tesseraq)
             # Paper-exact TesseraQ on 8B (iter=250, bsz=4, nsamples=512).
-            # CPU peak: 512-sample input_feat caches (4 subsets × ~8 GB each =
-            # 32 GB) + FP32 targets per block (~16 GB) + inps/outs (16 GB) +
-            # model + intermediates (~24 GB) = ~90 GB. Bump --mem to 160 GB for
-            # safety. Full h100 needed for ~28-32 GB GPU peak.
+            # 0.6B reference (job 12795327) OOM-killed at 48 GB. The prior
+            # "~90 GB / bump to 160 GB safety" estimate was extrapolated
+            # from the same too-tight 0.6B baseline; real 0.6B peak >> 48 GB.
+            # 8B per-sample AWQ memory scales with hidden² (4×) plus FP32
+            # block promotion of larger blocks plus per-sample input_feat
+            # caches. Budget 400 GB on full h100 (Nibi nodes 768 GB/node).
             gpu_resource="$GPU_FULL"
             cpus=16
-            mem="160G"
+            mem="400G"
             ;;
         leanquant-nu)
             # 128×2048 activations + GPTQ + weighted k-means on 8B:
             # model 16 + activations ~2 + blockwise work ~4 = ~22 GB peak.
             # 3g.40gb (40 GB) has comfortable margin.
+            # Phase 16: host RAM 48 → 64 GB.
             gpu_resource="$GPU_LARGE"
             cpus=8
-            mem="48G"
+            mem="64G"
             ;;
         pb-llm)
             # PB-LLM keeps fp16 outliers + GPTQ Hessians. Peak ~25 GB on 8B.
+            # Phase 16: host RAM 48 → 96 GB (PB-LLM has Phase-13 datautils
+            # crash history; double the budget to remove ambiguity).
             gpu_resource="$GPU_LARGE"
             cpus=8
-            mem="48G"
+            mem="96G"
             ;;
         fp16)
             # Eval only — ~19 GB peak. 3g.40gb is safest.
+            # Phase 16: host RAM 32 → 48 GB.
             gpu_resource="$GPU_LARGE"
             cpus=6
-            mem="32G"
+            mem="48G"
             ;;
         *)
             # rtn-2bit, gptq-2bit, sinq, doml, doml-binary, braq
             # Peak 22-25 GB ⇒ 3g.40gb (40 GB) fits with headroom.
+            # Phase 16: host RAM 48 → 64 GB.
             gpu_resource="$GPU_LARGE"
             cpus=8
-            mem="48G"
+            mem="64G"
             ;;
     esac
 }
@@ -209,19 +223,24 @@ get_time_limit() {
     # addition is heavy (~3-6 h, dominated by MMLU's 14K examples and
     # HellaSwag's 10K × 4 endings). FP16 / rtn / sinq / leanquant-nu
     # become eval-bound after Phase 15.
+    # Phase 16 update: +30-50% walltime margin on every method. Tesseraq
+    # bumped 64 → 96 h; Nibi b5 cap is 168 h = 7 days. Alliance Nibi
+    # partition tiers: b1≤3h, b2≤12h, b3≤24h, b4≤72h, b5≤168h. Walltimes
+    # are nudged off exact tier boundaries so SLURM routes them
+    # unambiguously to the next-larger bucket.
     case $1 in
-        fp16)         echo "08:00:00" ;;  # eval-bound; FP16 model load + ~6 h eval suite
-        rtn-2bit)     echo "09:00:00" ;;  # quant + 6 h eval suite
-        gptq-2bit)    echo "10:00:00" ;;
-        sinq)         echo "08:00:00" ;;  # SINQ no-GPTQ, dominated by eval suite
-        pb-llm)       echo "11:00:00" ;;
-        doml)         echo "12:00:00" ;;  # 7 h quant + ~5 h evals
-        doml-binary)  echo "12:00:00" ;;
-        braq)         echo "12:00:00" ;;
-        tesseraq)     echo "64:00:00" ;;  # 60 h quant + ~4 h evals (cap-bounded; check Nibi limit)
-        lnq)          echo "14:00:00" ;;  # 12 h Fisher/saliency/refine + 2 h evals
-        leanquant-nu) echo "08:00:00" ;;  # ~1 h quant + ~6 h evals + margin
-        *)            echo "08:00:00" ;;
+        fp16)         echo "10:00:00" ;;  # b2 — eval-bound; FP16 model load + ~6 h eval suite
+        rtn-2bit)     echo "12:30:00" ;;  # off b2/b3 boundary → b3
+        gptq-2bit)    echo "13:00:00" ;;  # b3
+        sinq)         echo "11:00:00" ;;  # b2 — SINQ no-GPTQ, dominated by eval suite
+        pb-llm)       echo "14:00:00" ;;  # b3
+        doml)         echo "16:00:00" ;;  # b3 — 9 h quant + ~5 h evals + margin
+        doml-binary)  echo "16:00:00" ;;  # b3
+        braq)         echo "16:00:00" ;;  # b3
+        tesseraq)     echo "96:00:00" ;;  # b5 — 92 h quant + ~4 h evals (was 64 h, b4)
+        lnq)          echo "20:00:00" ;;  # b3 — 16 h Fisher/saliency/refine + 4 h margin
+        leanquant-nu) echo "11:00:00" ;;  # b2 — ~1 h quant + ~6 h evals + margin
+        *)            echo "11:00:00" ;;
     esac
 }
 

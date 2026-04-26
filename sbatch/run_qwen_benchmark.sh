@@ -133,16 +133,16 @@ PBLLM_HIGH_BIT=8                # high-precision tier bit width
 # Methods to benchmark — one sbatch job per entry.
 techniques=(
     "fp16"
-    "rtn-2bit"
+    #"rtn-2bit"
     "gptq-2bit"
-    "sinq"
+    #"sinq"
     "lnq"
-    "leanquant-nu"
-    "tesseraq"
+    #"leanquant-nu"
+    #"tesseraq"
     "pb-llm"
-    "doml"
+    #"doml"
     #"doml-binary"
-    "braq"
+    #"braq"
 )
 
 # ============================================================================
@@ -153,7 +153,14 @@ get_job_resources() {
     # Sets: gpu_resource, cpus, mem
     # Qwen3-0.6B is small (~1.2 GB fp16). 1g.10gb covers every method
     # except LNQ (1024×4096 activations + Fisher grads) and TesseraQ
-    # (250 iters with backward pass), which want 2g.20gb.
+    # (250 iters with backward pass), which want larger MIG slices.
+    #
+    # Phase 16 (2026-04-26): generous bump across the board. Tesseraq @
+    # nsamples=512 (Phase-14B paper-exact) OOM-killed at 48 GB host RAM
+    # in job 12795327 (Block 0/28 AWQ init); the previous "26 GB peak"
+    # estimate was for nsamples=128 and missed the per-block FP32
+    # promotion + Adam optimizer state. Tesseraq RAM 48 → 96 GB.
+    # Other methods get +50% RAM and +30% walltime as preventative margin.
     case $1 in
         lnq)
             # 2g.20gb was insufficient: job 12504042 died with CUDA OOM at
@@ -162,32 +169,53 @@ get_job_resources() {
             # The faithful Phase-8 config (redpajama / 1024 × 4096 / Fisher
             # gradients + 4-group saliency Hessian + full-seqlen activations)
             # needs ≥ ~25 GB peak. 3g.40gb gives 40 GB headroom.
+            # Phase 16: bumped host RAM 48 → 64 GB for cushion.
             gpu_resource="$GPU_LARGE"
             cpus=8
-            mem="48G"
+            mem="64G"
             ;;
         tesseraq)
             # Paper-exact TesseraQ on 0.6B (iter=250, bsz=4, nsamples=512).
-            # CPU peak: 4 input_feat subsets × 4 GB + 4 GB FP32 targets +
-            # 4 GB inps/outs + 2 GB model = ~26 GB. Bump --mem 32 → 48 GB for
-            # safety.
+            # Job 12795327 OOM-killed at 48 GB during AWQ init (Block 0/28):
+            # _awq_capture_input_feats accumulates per-sample CPU tensors
+            # for every layer in a subset (n_calib=512 × seqlen × hidden,
+            # ≥6 GB per subset for 0.6B), then the optimization phase adds
+            # block.float() FP32 promotion + Adam optimizer state. True peak
+            # easily exceeds the prior "~26 GB" estimate (which was for
+            # nsamples=128). Bumped 48 → 96 GB; walltime 12 → 14 h to absorb
+            # the now-correct optimization phase that the OOM'd run never
+            # reached.
             gpu_resource="$GPU_MEDIUM"
             cpus=8
-            mem="48G"
+            mem="96G"
             ;;
         leanquant-nu)
             # 128×2048 activations (~512 MB on 0.6B) + per-row weighted k-means
             # fit comfortably on 1g.10gb. Keeps CPU count higher than DOML —
             # k-means is GPU-vectorised but CPU is used for calibration
             # pre-tokenisation (flock-serialised against the shared cache).
+            # Phase 16: RAM 16 → 24 GB.
             gpu_resource="$GPU_SMALL"
             cpus=4
-            mem="16G"
+            mem="24G"
+            ;;
+        pb-llm)
+            # PB-LLM xnor with 8-bit outliers: GPTQ Hessian + per-layer
+            # accumulators. 1g.10gb / 16 GB worked historically but PB-LLM
+            # has a Phase-13-class crash history (datautils star-import).
+            # Phase 16: promote slot 1g.10gb → 2g.20gb and RAM 16 → 32 GB
+            # to remove ambiguity if a future failure occurs.
+            gpu_resource="$GPU_MEDIUM"
+            cpus=4
+            mem="32G"
             ;;
         *)
+            # fp16, rtn-2bit, gptq-2bit, sinq, doml, doml-binary, braq.
+            # Phase 16: RAM 16 → 24 GB even though prior runs succeeded —
+            # cheap insurance against eval-suite memory growth.
             gpu_resource="$GPU_SMALL"
             cpus=4
-            mem="16G"
+            mem="24G"
             ;;
     esac
 }
@@ -195,22 +223,25 @@ get_job_resources() {
 get_time_limit() {
     # Phase 15 update: budgets now include the full eval suite (PPL on
     # wikitext2/c4/ptb + MMLU + HellaSwag + ARC-Easy + ARC-Challenge),
-    # which adds ~30-60 min on Qwen3-0.6B beyond quantization. All
-    # ~50-min budgets bumped to 3 h to leave 2-3x headroom for the
-    # downstream eval pass.
+    # which adds ~30-60 min on Qwen3-0.6B beyond quantization.
+    # Phase 16 update: +30-50% walltime margin on every method, since the
+    # 0.6B tesseraq OOM proved the previous estimates were too tight.
+    # Alliance Nibi partition tiers: b1≤3h, b2≤12h, b3≤24h, b4≤72h,
+    # b5≤168h. Walltimes are nudged off exact boundary values so SLURM
+    # routes them unambiguously to the next-larger bucket.
     case $1 in
-        fp16)         echo "02:00:00" ;;  # eval only — no quantization
-        rtn-2bit)     echo "02:30:00" ;;  # no GPTQ pass
-        gptq-2bit)    echo "02:45:00" ;;
-        sinq)         echo "02:30:00" ;;
-        pb-llm)       echo "03:00:00" ;;
-        doml)         echo "03:00:00" ;;  # 2-bit DOML — flagship method
-        doml-binary)  echo "03:00:00" ;;  # 1-bit variant
-        braq)         echo "03:00:00" ;;
-        tesseraq)     echo "12:00:00" ;;  # 10 h quantization + 2 h evals
-        lnq)          echo "06:00:00" ;;  # 4 h Fisher/refine + 2 h evals
-        leanquant-nu) echo "02:45:00" ;;  # measured 8.7 min on A40, 3-4x slower on 1g.10gb H100 MIG; +2 h evals
-        *)            echo "03:00:00" ;;
+        fp16)         echo "03:15:00" ;;  # b2 — eval only, no quantization (off b1 boundary)
+        rtn-2bit)     echo "03:30:00" ;;  # b2 — no GPTQ pass
+        gptq-2bit)    echo "04:00:00" ;;  # b2
+        sinq)         echo "03:30:00" ;;  # b2
+        pb-llm)       echo "04:30:00" ;;  # b2
+        doml)         echo "04:00:00" ;;  # b2 — 2-bit DOML, flagship method
+        doml-binary)  echo "04:00:00" ;;  # b2 — 1-bit variant
+        braq)         echo "04:00:00" ;;  # b2
+        tesseraq)     echo "14:00:00" ;;  # b3 — 12 h quantization + 2 h evals (was 12 h total)
+        lnq)          echo "08:00:00" ;;  # b2 — 6 h Fisher/refine + 2 h evals
+        leanquant-nu) echo "04:00:00" ;;  # b2 — measured 8.7 min on A40 + ~2 h evals + margin
+        *)            echo "04:00:00" ;;
     esac
 }
 
