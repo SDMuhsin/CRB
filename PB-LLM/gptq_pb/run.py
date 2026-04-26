@@ -317,21 +317,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--log_wandb", action="store_true", help="Whether to log to wandb."
     )
-    parser.add_argument(
-        "--eval_mmlu",
-        action="store_true",
-        help="Also evaluate on MMLU (5-shot multiple choice across 57 subjects).",
-    )
-    parser.add_argument(
-        "--eval_hellaswag",
-        action="store_true",
-        help="Also evaluate on HellaSwag (commonsense sentence completion).",
-    )
-    parser.add_argument(
-        "--eval_arc",
-        action="store_true",
-        help="Also evaluate on ARC (AI2 Reasoning Challenge, Easy + Challenge).",
-    )
+    # --eval_mmlu / --eval_hellaswag / --eval_arc plus --full_eval and
+    # --eval_extra_ppl are added by add_eval_cli further below.
+    import sys as _sys
+    _sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
+    _sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+    from eval_utils import add_eval_cli, resolve_eval_flags, evaluate_and_log_all
+    add_eval_cli(parser)
 
     args = parser.parse_args()
 
@@ -359,81 +351,23 @@ if __name__ == "__main__":
                 break
         print(time.time() - tick)
 
-    ppl = None
-    for dataset in [args.dataset]:
-        # for dataset in ['c4']:
-        # for dataset in ['wikitext2']:
-        dataloader, testloader = get_loaders(
-            dataset, seed=args.seed, model=args.model, seqlen=model.seqlen
-        )
-        print(dataset)
-        if "opt" in args.model:
-            from eval_ppl_utils import opt_eval
+    eval_flags = resolve_eval_flags(args, primary_dataset=args.dataset)
 
-            ppl = opt_eval(model, testloader, device, dataset, args.log_wandb,save_title=save_title)
-        elif "huggyllama" in args.model:
-            from eval_ppl_utils import llama_eval
-
-            ppl = llama_eval(model, testloader, device, dataset, args.log_wandb,save_title=save_title)
-        elif "bloom" in args.model.lower():
-            import sys
-            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-            from eval_ppl_utils import bloom_eval
-            ppl = bloom_eval(model, testloader, device, dataset, args.log_wandb, save_title=save_title)
-        elif "qwen" in args.model.lower():
-            import sys
-            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-            from eval_ppl_utils import qwen_eval
-            ppl = qwen_eval(model, testloader, device, dataset, args.log_wandb, save_title=save_title)
-
-        # CSV output
-        if ppl is not None:
-            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
-            from csv_utils import append_result as _csv_append
-            _csv_append(
-                model=args.model, method="pbllm", dataset=dataset,
-                metric="perplexity", value=ppl,
-                bpw="", seed=args.seed, blocksize=args.blocksize,
-                salient_metric=args.salient_metric,
-                extra_params={"low_frac": args.low_frac, "high_bit": args.high_bit,
-                              "low_quant_method": args.low_quant_method},
-                quantization_time_s="",
-            )
-
-    # CSV helper for downstream evals
-    import sys
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-    from csv_utils import append_result as _csv_append
-    def _pb_csv(metric, value):
-        _csv_append(
-            model=args.model, method="pbllm", dataset=args.dataset,
-            metric=metric, value=value,
-            bpw="", seed=args.seed, blocksize=args.blocksize,
-            salient_metric=args.salient_metric,
-            extra_params={"low_frac": args.low_frac, "high_bit": args.high_bit,
-                          "low_quant_method": args.low_quant_method},
-        )
-
-    # Model-agnostic benchmarks
-    if args.eval_mmlu:
-        from eval_mmlu import eval_mmlu
-        mmlu_title = f"{save_title}_MMLU"
-        mmlu_acc = eval_mmlu(model, args.model, device, save_title=mmlu_title)
-        _pb_csv("mmlu_acc", mmlu_acc)
-
-    if args.eval_hellaswag:
-        from eval_hellaswag import eval_hellaswag
-        hellaswag_title = f"{save_title}_HELLASWAG"
-        hellaswag_acc = eval_hellaswag(model, args.model, device, save_title=hellaswag_title)
-        _pb_csv("hellaswag_acc", hellaswag_acc)
-
-    if args.eval_arc:
-        from eval_arc import eval_arc
-        arc_title = f"{save_title}_ARC"
-        arc_results = eval_arc(model, args.model, device, save_title=arc_title)
-        _pb_csv("arc_easy_acc", arc_results["ARC-Easy"]["accuracy"])
-        _pb_csv("arc_challenge_acc", arc_results["ARC-Challenge"]["accuracy"])
+    evaluate_and_log_all(
+        model, args.model, device,
+        method="pbllm",
+        bpw="", seed=args.seed, blocksize=args.blocksize,
+        salient_metric=args.salient_metric,
+        extra_params={"low_frac": args.low_frac, "high_bit": args.high_bit,
+                      "low_quant_method": args.low_quant_method},
+        quantization_time_s="",
+        ppl_datasets=eval_flags["ppl_datasets"],
+        eval_mmlu=eval_flags["eval_mmlu"],
+        eval_hellaswag=eval_flags["eval_hellaswag"],
+        eval_arc=eval_flags["eval_arc"],
+        ppl_eval_seqlen=eval_flags["ppl_eval_seqlen"],
+        save_title_prefix=save_title.replace("/", "_"),
+    )
 
     if args.save:
         save_path = os.path.dirname(save_file)

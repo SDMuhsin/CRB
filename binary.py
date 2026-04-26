@@ -2942,58 +2942,37 @@ class Binarization(nn.Module):
             # Simple round-to-nearest binary: sign * mean(|w|) per row
             scale = w.abs().mean(dim=1, keepdim=True).clamp(min=1e-8)
             w = w.sign() * scale
-        elif self.method in ['2bit','4bit']:
+        elif self.method in ['2bit','3bit','4bit']:
 
             bits = int(self.method[0])
-            perchannel = True
-            weight = True
             dev = w.device
-            maxq = torch.tensor(2 ** bits - 1)
-            scale = torch.zeros(1)
-            zero = torch.zeros(1)
+            maxq = torch.tensor(2 ** bits - 1, device=dev)
 
-            if dev != scale.device:
-                scale=scale.to(dev)
-                zero=zero.to(dev)
-                maxq=maxq.to(dev)
-
-            x = w.clone()
-            shape = x.shape
-
-            if perchannel:
-                if weight:
-                    x = x.flatten(1)
-                else:
-                    if len(shape) == 4:
-                        x = x.permute([1, 0, 2, 3])
-                        x = x.flatten(1)
-                    if len(shape) == 3:
-                        x = x.reshape((-1, shape[-1])).t()
-                    if len(shape) == 2:
-                        x = x.t()
+            # Paper Table 3 reproduction: per-row global scale (computed once
+            # on the full weight matrix before the GPTQ block loop). When set
+            # by the caller (bigptq.fasterquant), use it instead of recomputing
+            # per-block scales. Otherwise fall back to per-row scale computed
+            # from the columns given (matches paper Table 7 gs=blocksize).
+            if getattr(self, 'global_scale', None) is not None and \
+               getattr(self, 'global_zero', None) is not None:
+                scale = self.global_scale.to(dev).to(w.dtype)
+                zero = self.global_zero.to(dev).to(w.dtype)
             else:
-                x = x.flatten().unsqueeze(0)
-            tmp = torch.zeros(x.shape[0], device=dev)
-            xmin = torch.minimum(x.min(1)[0], tmp)
-            xmax = torch.maximum(x.max(1)[0], tmp)
+                x = w.clone()
+                shape = x.shape  # (oc, ic_block)
+                x = x.flatten(1)  # (oc, ic_block)
+                tmp = torch.zeros(x.shape[0], device=dev)
+                xmin = torch.minimum(x.min(1)[0], tmp)
+                xmax = torch.maximum(x.max(1)[0], tmp)
+                degenerate = (xmin == 0) & (xmax == 0)
+                xmin[degenerate] = -1
+                xmax[degenerate] = +1
+                scale = (xmax - xmin) / maxq
+                zero = torch.round(-xmin / scale)
+                shape_bc = [-1] + [1] * (len(shape) - 1)
+                scale = scale.reshape(shape_bc)
+                zero = zero.reshape(shape_bc)
 
-            tmp = (xmin == 0) & (xmax == 0)
-            xmin[tmp] = -1
-            xmax[tmp] = +1
-            scale = (xmax - xmin) / maxq
-            zero = torch.round(-xmin / scale)
-            if not perchannel:
-                if weight:
-                    tmp = shape[0]
-                else:
-                    tmp = shape[1] if len(shape) != 3 else shape[2]
-                scale = scale.repeat(tmp)
-                zero = zero.repeat(tmp)
-
-            if weight:
-                shape = [-1] + [1] * (len(shape) - 1)
-                scale = scale.reshape(shape)
-                zero = zero.reshape(shape)
             w = normal_quantize(w, scale, zero, maxq)
 
         elif self.method=="prune":

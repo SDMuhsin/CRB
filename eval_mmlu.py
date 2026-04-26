@@ -8,6 +8,9 @@ from datasets import load_dataset
 
 EVAL_SAVE_FILE = "./output/GLOBAL_MMLU.json"
 
+# Honor BILLM_DOWNLOADS_DIR so cluster jobs route HF dataset cache to scratch.
+_DATASETS_CACHE = os.path.join(os.environ.get("BILLM_DOWNLOADS_DIR", "./downloads"), "datasets")
+
 
 def save_result(save_title, results):
     """Save MMLU results to JSON file with file locking."""
@@ -68,7 +71,7 @@ def eval_mmlu(model, model_name, dev, save_title='UNNAMED_MMLU'):
     tokenizer = get_tokenizer(model_name)
 
     # Load MMLU dataset
-    dataset = load_dataset("cais/mmlu", "all", cache_dir="./downloads/datasets")
+    dataset = load_dataset("cais/mmlu", "all", cache_dir=_DATASETS_CACHE)
     test_data = dataset['test']
     # Few-shot examples come from validation split
     try:

@@ -58,12 +58,49 @@ def get_wikitext2(nsamples, seed, seqlen, model, tokenizer):
         trainloader.append((inp, tar))
     return trainloader, testenc
 
-def get_ptb(nsamples, seed, seqlen, model, tokenizer):
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
-    testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test')
+def _ptb_load_split(split):
+    """Load Penn Treebank from local Arrow files.
 
-    trainenc = tokenizer(" ".join(traindata['sentence']), return_tensors='pt')
-    testenc = tokenizer(" ".join(testdata['sentence']), return_tensors='pt')
+    `datasets >= 4.x` dropped script-based loaders, so `load_dataset('ptb_text_only',
+    'penn_treebank')` raises RuntimeError. Fall back to direct Arrow read of the
+    pre-existing cache populated by an older datasets version. Returns list[str] of
+    sentences.
+    """
+    try:
+        ds = load_dataset('ptb_text_only', 'penn_treebank', split=split)
+        return list(ds['sentence'])
+    except Exception:
+        pass
+
+    # Glob the on-disk cache: <root>/datasets/ptb_text_only/penn_treebank/<ver>/<hash>/ptb_text_only-<split>.arrow
+    import glob
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+
+    candidates = []
+    for root in [downloads_dir, "./downloads"]:
+        candidates.extend(glob.glob(os.path.join(
+            root, "datasets", "ptb_text_only", "penn_treebank", "*", "*",
+            f"ptb_text_only-{split}.arrow",
+        )))
+    if not candidates:
+        raise FileNotFoundError(
+            f"PTB Arrow file for split={split!r} not found. Searched under "
+            f"{downloads_dir}/datasets/ptb_text_only and ./downloads/datasets/ptb_text_only. "
+            f"Pre-warm the cache on a node with internet first."
+        )
+    arrow_path = sorted(candidates)[0]
+    with pa.memory_map(arrow_path, 'r') as src:
+        table = ipc.open_stream(src).read_all()
+    return [str(s) for s in table.column('sentence').to_pylist()]
+
+
+def get_ptb(nsamples, seed, seqlen, model, tokenizer):
+    train_sentences = _ptb_load_split('train')
+    test_sentences = _ptb_load_split('test')
+
+    trainenc = tokenizer(" ".join(train_sentences), return_tensors='pt')
+    testenc = tokenizer(" ".join(test_sentences), return_tensors='pt')
 
     random.seed(seed)
     trainloader = []
@@ -80,22 +117,40 @@ class TokenizerWrapper:
     def __init__(self, input_ids):
         self.input_ids = input_ids
 
+def _c4_read_shard(filename):
+    """Download (if needed) and parse one C4 shard into a list of texts.
+
+    Uses huggingface_hub.hf_hub_download for offline-stable behavior — same pattern
+    as get_redpajama. `datasets.load_dataset('c4', 'en', streaming=True)` does not
+    work behind HF_HUB_OFFLINE=1 and previously broke C4 PPL eval entirely.
+    """
+    from huggingface_hub import hf_hub_download
+    import gzip
+    import json as _json
+    shard_path = hf_hub_download(
+        repo_id='allenai/c4', filename=filename, repo_type='dataset',
+        cache_dir=downloads_dir,
+    )
+    texts = []
+    with gzip.open(shard_path, 'rt', encoding='utf-8') as f:
+        for line in f:
+            obj = _json.loads(line)
+            if 'text' in obj:
+                texts.append(obj['text'])
+    return texts
+
+
 def get_c4(nsamples, seed, seqlen, model, tokenizer):
-    traindata = load_dataset(
-        'c4', 'en', split='train', streaming=True
-    )
-    valdata = load_dataset(
-        'c4', 'en', split='validation', streaming=True
-    )
+    train_texts = _c4_read_shard('en/c4-train.00000-of-01024.json.gz')
+    val_texts = _c4_read_shard('en/c4-validation.00000-of-00008.json.gz')
 
     random.seed(seed)
     trainloader = []
-    for _ in range(nsamples):
-        while True:
-            sample = next(iter(traindata))
-            trainenc = tokenizer(sample['text'], return_tensors='pt')
-            if trainenc.input_ids.shape[1] > seqlen:
-                break
+    while len(trainloader) < nsamples:
+        idx = random.randint(0, len(train_texts) - 1)
+        trainenc = tokenizer(train_texts[idx], return_tensors='pt')
+        if trainenc.input_ids.shape[1] <= seqlen:
+            continue
         i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
         j = i + seqlen
         inp = trainenc.input_ids[:, i:j]
@@ -103,9 +158,10 @@ def get_c4(nsamples, seed, seqlen, model, tokenizer):
         tar[:, :-1] = -100
         trainloader.append((inp, tar))
 
-    valenc = tokenizer(' '.join([next(iter(valdata))['text'] for _ in range(1100)]), return_tensors='pt')
+    # Build validation encoding the same way as the original streaming path:
+    # join the first ~1100 documents and slice to a 256 × seqlen test run.
+    valenc = tokenizer(' '.join(val_texts[:1100]), return_tensors='pt')
     valenc = valenc.input_ids[:, :(256 * seqlen)]
-
     valenc = TokenizerWrapper(valenc)
 
     return trainloader, valenc

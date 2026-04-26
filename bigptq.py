@@ -54,10 +54,11 @@ class BRAGPTQ:
         # breakpoint()
 
     def fasterquant(self,
-                    blocksize=128, 
-                    percdamp=0.01, 
-                    partition=3, 
+                    blocksize=128,
+                    percdamp=0.01,
+                    partition=3,
                     orders=(1,1,2),
+                    global_scale=False,
                     ):
         W = self.layer.weight.data.clone()
         if isinstance(self.layer, nn.Conv2d):
@@ -66,6 +67,36 @@ class BRAGPTQ:
             W = W.t()
         W = W.float()
         tick = time.time()
+
+        # Paper-faithful GPTQ (Frantar et al. 2023, Table 3 no-groupsize):
+        # per-row min/max computed ONCE on the full (pre-feedback) weight
+        # matrix, then held constant across all GPTQ blocks. Forwarded into
+        # Binarization via the `global_scale`/`global_zero` attributes.
+        # Only activated when `global_scale=True` and the underlying
+        # quantizer supports it (currently the '2bit'/'4bit' path in
+        # binary.py).
+        if global_scale and getattr(self.braq_quantizer, 'method', None) in ('2bit', '3bit', '4bit'):
+            bits = int(self.braq_quantizer.method[0])
+            dev = W.device
+            maxq_g = torch.tensor(2 ** bits - 1, device=dev)
+            xg = W.flatten(1)
+            tmp0 = torch.zeros(xg.shape[0], device=dev)
+            xmin_g = torch.minimum(xg.min(1)[0], tmp0)
+            xmax_g = torch.maximum(xg.max(1)[0], tmp0)
+            degen = (xmin_g == 0) & (xmax_g == 0)
+            xmin_g[degen] = -1
+            xmax_g[degen] = +1
+            scale_g = (xmax_g - xmin_g) / maxq_g
+            zero_g = torch.round(-xmin_g / scale_g)
+            shape_bc = [-1] + [1] * (W.dim() - 1)
+            self.braq_quantizer.global_scale = scale_g.reshape(shape_bc)
+            self.braq_quantizer.global_zero = zero_g.reshape(shape_bc)
+        else:
+            # Ensure stale attributes from a previous call are cleared.
+            if hasattr(self.braq_quantizer, 'global_scale'):
+                self.braq_quantizer.global_scale = None
+            if hasattr(self.braq_quantizer, 'global_zero'):
+                self.braq_quantizer.global_zero = None
 
         H = self.H
         del self.H
@@ -137,39 +168,100 @@ class BRAGPTQ:
                 Losses1 = torch.zeros_like(W1)
                 Hinv1 = Hinv[col_st:col_ed, col_st:col_ed]
 
-                q_part_groups = []
+                # Dispatch between two quantization modes:
+                #   (A) partition == 1 AND quantizer is a simple integer method
+                #       (2bit/3bit/4bit): paper-faithful GPTQ — column-by-column
+                #       quantize + intra-block error feedback. Scales are either
+                #       the pre-computed `global_scale` (paper Table 3 no-groupsize)
+                #       or per-row-per-block min/max (paper Table 7 gs=blocksize),
+                #       computed ONCE before the column sweep and held fixed.
+                #   (B) partition > 1 OR non-integer quantizer (DOML/BRAQ/CRB/…):
+                #       legacy pre-quantize-then-read path. DOML's structural
+                #       partition is defined on the original block; per-row
+                #       Lloyd-Max levels cannot be computed per-column, so we
+                #       keep the original behaviour here. Accepted as a
+                #       DOML-family design choice; see llmdocs/trackers/
+                #       baseline_faithfulness_audit.md Phase 14B.
+                is_int_quant = getattr(self.braq_quantizer, 'method', None) in (
+                    '2bit', '3bit', '4bit'
+                )
 
-                # Compute column importance weights from Hessian inverse diagonal
-                # for adaptive methods that need them.
-                # 1/Hinv[j,j]^2 = GPTQ per-column loss weight (higher = more important).
-                hinv_diag = torch.diag(Hinv1)
-                col_weights = 1.0 / (hinv_diag ** 2 + 1e-12)
-                # Alternative: use raw Hessian diagonal (uncomment to test)
-                # col_weights = H_diag_raw[col_st:col_ed]
+                if partition == 1 and is_int_quant:
+                    # Paper-faithful GPTQ column sweep.
+                    bits = int(self.braq_quantizer.method[0])
+                    dev = W1.device
+                    maxq = torch.tensor(2 ** bits - 1, device=dev, dtype=W1.dtype)
 
-                for i in range(mask.shape[0]):
-                    q_part_groups.append(self.braq_quantizer.quantize(W1, mask[i], order=orders[i], col_weights=col_weights))
+                    gs = getattr(self.braq_quantizer, 'global_scale', None)
+                    gz = getattr(self.braq_quantizer, 'global_zero', None)
+                    if gs is not None and gz is not None:
+                        # Paper Table 3: per-row scale pre-computed on full W.
+                        scale = gs.to(dev).to(W1.dtype).view(-1)   # (oc,)
+                        zero = gz.to(dev).to(W1.dtype).view(-1)    # (oc,)
+                    else:
+                        # Paper Table 7-style: per-row scale from the original
+                        # (pre-feedback) block W1. Equivalent to groupsize=blocksize.
+                        zero_ref = torch.zeros(W1.shape[0], device=dev, dtype=W1.dtype)
+                        row_min = torch.minimum(W1.min(dim=1)[0], zero_ref)
+                        row_max = torch.maximum(W1.max(dim=1)[0], zero_ref)
+                        degen = (row_min == 0) & (row_max == 0)
+                        row_min = torch.where(degen, torch.full_like(row_min, -1.0), row_min)
+                        row_max = torch.where(degen, torch.full_like(row_max, 1.0), row_max)
+                        scale = (row_max - row_min) / maxq                 # (oc,)
+                        zero = torch.round(-row_min / scale)               # (oc,)
 
-                for i in range(n_cols):
-                    # shape of w: [oc, 1]
-                    w = W1[:, i]
-                    d = Hinv1[i, i]
+                    qmin = torch.tensor(0.0, device=dev, dtype=W1.dtype)
+                    for i in range(n_cols):
+                        w = W1[:, i]                                       # (oc,)
+                        d = Hinv1[i, i]
 
-                    q = torch.zeros_like(w)
-                    for j in range(mask.shape[0]):
-                        q += q_part_groups[j][:, i] * mask[j, :, i]
+                        q_int = torch.clamp(torch.round(w / scale) + zero, qmin, maxq)
+                        q = (q_int - zero) * scale
 
-                    Q1[:, i] = q
-                    Losses1[:, i] = (w - q) ** 2 / d**2
-                    # breakpoint()
+                        Q1[:, i] = q
+                        Losses1[:, i] = (w - q) ** 2 / (d * d)
+                        err1 = (w - q) / d
+                        Err1[:, i] = err1
 
-                    err1 = (w - q) / d
-                    Err1[:, i] = err1
+                        # Intra-block GPTQ feedback: update remaining columns
+                        # in this block using the current column's error.
+                        if i + 1 < n_cols:
+                            W1[:, i + 1:] -= err1.unsqueeze(1) * Hinv1[i, i + 1:].unsqueeze(0)
 
-                W[:, col_st:col_ed] = Q1
-                Losses += torch.sum(Losses1, 1) / 2
+                    W[:, col_st:col_ed] = Q1
+                    Losses += torch.sum(Losses1, 1) / 2
+                    # Inter-block GPTQ feedback.
+                    W[:, col_ed:] -= Err1.matmul(Hinv[col_st:col_ed, col_ed:])
+                else:
+                    # Legacy pre-quantize-then-read path for DOML / BRAQ / CRB /
+                    # other partitioned or non-integer quantizers.
+                    q_part_groups = []
 
-                W[:, col_ed:] -= Err1.matmul(Hinv[col_st:col_ed, col_ed:])
+                    # Column importance weights from Hessian inverse diagonal
+                    # for adaptive methods that need them. 1/Hinv[j,j]^2 is the
+                    # GPTQ per-column loss weight (higher = more important).
+                    hinv_diag = torch.diag(Hinv1)
+                    col_weights = 1.0 / (hinv_diag ** 2 + 1e-12)
+
+                    for i in range(mask.shape[0]):
+                        q_part_groups.append(self.braq_quantizer.quantize(W1, mask[i], order=orders[i], col_weights=col_weights))
+
+                    for i in range(n_cols):
+                        w = W1[:, i]
+                        d = Hinv1[i, i]
+
+                        q = torch.zeros_like(w)
+                        for j in range(mask.shape[0]):
+                            q += q_part_groups[j][:, i] * mask[j, :, i]
+
+                        Q1[:, i] = q
+                        Losses1[:, i] = (w - q) ** 2 / d**2
+                        err1 = (w - q) / d
+                        Err1[:, i] = err1
+
+                    W[:, col_st:col_ed] = Q1
+                    Losses += torch.sum(Losses1, 1) / 2
+                    W[:, col_ed:] -= Err1.matmul(Hinv[col_st:col_ed, col_ed:])
 
                 if DEBUG:
                     self.layer.weight.data[:, :col_ed] = W[:, :col_ed]

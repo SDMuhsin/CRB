@@ -123,7 +123,9 @@ SINQ_NBITS=2
 SINQ_GROUPSIZE=64
 TESSERAQ_BIT=2
 TESSERAQ_GROUPSIZE=128
-TESSERAQ_ITERATIONS=250
+TESSERAQ_ITERATIONS=250        # paper default (20 thresholds × 250 iters = 5000 iters/block)
+TESSERAQ_BATCH_SIZE=4          # paper default
+TESSERAQ_NSAMPLES=512          # paper default (was 128); 4× more calibration data + per-sample AWQ forwards
 PBLLM_METHOD="xnor"             # PB-LLM partial-binarization variant
 PBLLM_LOW_FRAC=0.9              # fraction of weights kept binary (10% high-prec)
 PBLLM_HIGH_BIT=8                # high-precision tier bit width
@@ -165,9 +167,13 @@ get_job_resources() {
             mem="48G"
             ;;
         tesseraq)
+            # Paper-exact TesseraQ on 0.6B (iter=250, bsz=4, nsamples=512).
+            # CPU peak: 4 input_feat subsets × 4 GB + 4 GB FP32 targets +
+            # 4 GB inps/outs + 2 GB model = ~26 GB. Bump --mem 32 → 48 GB for
+            # safety.
             gpu_resource="$GPU_MEDIUM"
             cpus=8
-            mem="32G"
+            mem="48G"
             ;;
         leanquant-nu)
             # 128×2048 activations (~512 MB on 0.6B) + per-row weighted k-means
@@ -187,22 +193,24 @@ get_job_resources() {
 }
 
 get_time_limit() {
-    # Comfortable buffer (~1.5–2x expected) per method on a 1g.10gb/2g.20gb
-    # slice. Figures calibrated from known Qwen3-0.6B wall times in
-    # llmdocs/CONTEXT.md scaled down for the smaller 0.5B model.
+    # Phase 15 update: budgets now include the full eval suite (PPL on
+    # wikitext2/c4/ptb + MMLU + HellaSwag + ARC-Easy + ARC-Challenge),
+    # which adds ~30-60 min on Qwen3-0.6B beyond quantization. All
+    # ~50-min budgets bumped to 3 h to leave 2-3x headroom for the
+    # downstream eval pass.
     case $1 in
-        fp16)         echo "00:20:00" ;;  # eval only
-        rtn-2bit)     echo "00:30:00" ;;  # no GPTQ pass
-        gptq-2bit)    echo "00:45:00" ;;
-        sinq)         echo "00:40:00" ;;
-        pb-llm)       echo "00:50:00" ;;
-        doml)         echo "00:50:00" ;;  # 2-bit DOML — flagship method
-        doml-binary)  echo "00:50:00" ;;  # 1-bit variant
-        braq)         echo "00:50:00" ;;
-        tesseraq)     echo "05:00:00" ;;  # 250 optim iters — job 12501759 hit 2h30m TIME LIMIT at block 21/28 step 17/20
-        lnq)          echo "04:00:00" ;;  # Fisher + saliency + LNQ refine
-        leanquant-nu) echo "00:50:00" ;;  # measured 8.7 min on A40, 3-4x slower on 1g.10gb H100 MIG
-        *)            echo "01:00:00" ;;
+        fp16)         echo "02:00:00" ;;  # eval only — no quantization
+        rtn-2bit)     echo "02:30:00" ;;  # no GPTQ pass
+        gptq-2bit)    echo "02:45:00" ;;
+        sinq)         echo "02:30:00" ;;
+        pb-llm)       echo "03:00:00" ;;
+        doml)         echo "03:00:00" ;;  # 2-bit DOML — flagship method
+        doml-binary)  echo "03:00:00" ;;  # 1-bit variant
+        braq)         echo "03:00:00" ;;
+        tesseraq)     echo "12:00:00" ;;  # 10 h quantization + 2 h evals
+        lnq)          echo "06:00:00" ;;  # 4 h Fisher/refine + 2 h evals
+        leanquant-nu) echo "02:45:00" ;;  # measured 8.7 min on A40, 3-4x slower on 1g.10gb H100 MIG; +2 h evals
+        *)            echo "03:00:00" ;;
     esac
 }
 
@@ -211,7 +219,9 @@ build_python_cmd() {
     local technique=$1
 
     local common_ds_seed="$MODEL $DATASET --seed $SEED --device cuda:0"
-    local common_evals=""   # add "--eval_arc --eval_mmlu --eval_hellaswag" here to enable
+    # --full_eval = PPL on (wikitext2,c4,ptb) + MMLU + HellaSwag + ARC-Easy + ARC-Challenge.
+    # Each task writes its own row to BILLM_BENCH_CSV with the (dataset, metric) tag.
+    local common_evals="--full_eval"
 
     case $technique in
         fp16)
@@ -222,7 +232,13 @@ build_python_cmd() {
             echo "python3 -u run.py $MODEL $DATASET 2bit --disable_gptq --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
             ;;
         gptq-2bit)
-            echo "python3 -u run.py $MODEL $DATASET 2bit --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
+            # Paper-faithful GPTQ-2bit (Frantar et al. 2023, Table 3 no-groupsize):
+            # per-row global scale + single mask (partition=1). Historically this
+            # column defaulted to partition=3 (DOML's structural split), which
+            # Phase 14 identified as a DOML-uniform ablation, not paper GPTQ.
+            # OPT-1.3B W4 validation: --partition 1 --global_scale matched paper
+            # Table 3 within 0.5% (15.54 vs 15.47 PPL, 2026-04-22).
+            echo "python3 -u run.py $MODEL $DATASET 2bit --partition 1 --global_scale --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
             ;;
         doml)
             # Flagship 2-bit method: K=4 Lloyd-Max + GPTQ + structural partition (~2.06–2.15 bpw).
@@ -239,7 +255,12 @@ build_python_cmd() {
             echo "python3 -u src/run_sinq.py $MODEL $DATASET --nbits $SINQ_NBITS --group_size $SINQ_GROUPSIZE --seed $SEED --device cuda:0 $common_evals"
             ;;
         tesseraq)
-            echo "python3 -u src/run_tesseraq.py $MODEL $DATASET --bit $TESSERAQ_BIT --group_size $TESSERAQ_GROUPSIZE --iterations $TESSERAQ_ITERATIONS --seed $SEED --device cuda:0 $common_evals"
+            # Paper-faithful TesseraQ (ICLR 2025): AWQ init + PAR + grad-clip
+            # + bfloat16 autocast + batched forward. All paper-reported PPLs
+            # use AWQ init (`load_transform: True`). `--use_awq_init` is the
+            # default in `src/run_tesseraq.py` as of 2026-04-22; pass
+            # `--no_awq_init` to reproduce the previous PAR-only ablation.
+            echo "python3 -u src/run_tesseraq.py $MODEL $DATASET --bit $TESSERAQ_BIT --group_size $TESSERAQ_GROUPSIZE --iterations $TESSERAQ_ITERATIONS --batch_size $TESSERAQ_BATCH_SIZE --nsamples $TESSERAQ_NSAMPLES --seed $SEED --device cuda:0 $common_evals"
             ;;
         lnq)
             echo "python3 -u src/run_lnq.py $MODEL $DATASET --full_pipeline --no_propagate --calib_dataset $LNQ_CALIB --nsamples $LNQ_NSAMPLES --seqlen $LNQ_SEQLEN --num_groups $LNQ_NUM_GROUPS --nbits $LNQ_NBITS --seed $SEED --device cuda:0 $common_evals"
@@ -265,11 +286,11 @@ get_technique_desc() {
     case $1 in
         fp16)         echo "FP16 baseline (no quantization)"                                ;;
         rtn-2bit)     echo "RTN @ 2-bit (GPTQ disabled, blocksize=$BLOCKSIZE)"              ;;
-        gptq-2bit)    echo "GPTQ @ 2-bit (blocksize=$BLOCKSIZE, salient=$SALIENT_METRIC)"   ;;
+        gptq-2bit)    echo "GPTQ @ 2-bit paper-faithful (--partition 1 --global_scale, per-row no-groupsize, blocksize=$BLOCKSIZE)" ;;
         sinq)         echo "SINQ (nbits=$SINQ_NBITS, group_size=$SINQ_GROUPSIZE)"           ;;
         lnq)          echo "GuidedQuant/LNQ (nbits=$LNQ_NBITS, $LNQ_CALIB/$LNQ_NSAMPLES/$LNQ_SEQLEN, groups=$LNQ_NUM_GROUPS, no_propagate)" ;;
         leanquant-nu) echo "LeanQuant_nu (nbits=$LEANQUANT_NBITS, p=$LEANQUANT_EXPONENT, percdamp=$LEANQUANT_PERCDAMP, $LEANQUANT_CALIB/$LEANQUANT_NSAMPLES/$LEANQUANT_SEQLEN, act_order+true_sequential)" ;;
-        tesseraq)     echo "TesseraQ (bit=$TESSERAQ_BIT, gs=$TESSERAQ_GROUPSIZE, iters=$TESSERAQ_ITERATIONS)" ;;
+        tesseraq)     echo "TesseraQ paper-exact (bit=$TESSERAQ_BIT, gs=$TESSERAQ_GROUPSIZE, iters=$TESSERAQ_ITERATIONS, bsz=$TESSERAQ_BATCH_SIZE, nsamples=$TESSERAQ_NSAMPLES, AWQ init on)" ;;
         pb-llm)       echo "PB-LLM ($PBLLM_METHOD, low_frac=$PBLLM_LOW_FRAC, high_bit=$PBLLM_HIGH_BIT, blocksize=$BLOCKSIZE)" ;;
         doml)         echo "DOML (K=4, Lloyd-Max + GPTQ + structural partition, salient=$SALIENT_METRIC)" ;;
         doml-binary)  echo "DOML-binary (K=2, Lloyd-Max + GPTQ + structural partition)"     ;;

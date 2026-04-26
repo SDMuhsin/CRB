@@ -43,7 +43,6 @@ assert os.path.isdir(AQLM_SOURCE), (
 sys.path.insert(0, AQLM_SOURCE)
 
 from datautils import get_tokenizer, set_seed
-from eval_ppl_utils import llama_eval, opt_eval, qwen_eval
 
 
 # =====================================================================
@@ -417,25 +416,6 @@ def aqlm_quantize_model(model, args):
 # Evaluation
 # =====================================================================
 
-def evaluate_ppl(model, testenc, args):
-    """Evaluate perplexity using our standard evaluation code."""
-    dev = torch.device(args.device)
-    model_type = detect_model_type(model)
-    model_short = args.model.split('/')[-1]
-    save_title = (
-        f"aqlm_{args.num_codebooks}x{args.nbits_per_codebook}"
-        f"g{args.in_group_size}_{model_short}_{args.dataset}_seed{args.seed}"
-    )
-
-    if model_type == 'opt':
-        ppl = opt_eval(model, testenc, dev, args.dataset, save_title=save_title)
-    elif model_type == 'llama':
-        ppl = llama_eval(model, testenc, dev, args.dataset, save_title=save_title)
-    elif model_type == 'qwen':
-        ppl = qwen_eval(model, testenc, dev, args.dataset, save_title=save_title)
-    return ppl
-
-
 # =====================================================================
 # Main
 # =====================================================================
@@ -501,14 +481,13 @@ def main():
     parser.add_argument('--true_sequential', action='store_true',
                         help='Process sublayers sequentially (more accurate, slower)')
 
-    # Downstream eval
-    parser.add_argument('--eval_arc', action='store_true')
-    parser.add_argument('--eval_mmlu', action='store_true')
-    parser.add_argument('--eval_hellaswag', action='store_true')
+    # Downstream eval — flags provided by add_eval_cli (--full_eval, --eval_extra_ppl,
+    # --ppl_eval_seqlen, --eval_arc, --eval_mmlu, --eval_hellaswag).
+    from csv_utils import append_result as csv_append
+    from eval_utils import add_eval_cli, resolve_eval_flags, evaluate_and_log_all
+    add_eval_cli(parser)
 
     args = parser.parse_args()
-
-    from csv_utils import append_result as csv_append
 
     set_seed(args.seed)
     torch.manual_seed(args.seed)
@@ -516,11 +495,6 @@ def main():
 
     print(f"Loading model: {args.model}")
     model = get_model(args.model)
-
-    # Load test data for PPL evaluation (our standard eval)
-    from datautils import get_loaders
-    tokenizer = get_tokenizer(args.model)
-    _, testenc = get_loaders(args.dataset, seed=args.seed, seqlen=model.seqlen, model=args.model)
 
     # Quantize with AQLM
     tick = time.time()
@@ -542,47 +516,31 @@ def main():
         "scheme": scheme,
     }
 
-    def _csv(dataset, metric, value):
-        csv_append(model=args.model, method="aqlm", dataset=dataset,
-                   metric=metric, value=value, bpw=bpw, seed=args.seed,
-                   blocksize=args.in_group_size, salient_metric="",
-                   extra_params=extra, quantization_time_s=quant_time)
-
-    # Evaluate PPL using our standard eval code
-    print(f"\n{'='*60}")
-    print(f"Evaluating perplexity on {args.dataset}...")
-    print(f"{'='*60}")
-    ppl = evaluate_ppl(model, testenc, args)
-    _csv(args.dataset, "perplexity", ppl)
+    eval_flags = resolve_eval_flags(args, primary_dataset=args.dataset)
 
     model_short = args.model.split('/')[-1]
     print(f"\n{'='*60}")
     print(f"RESULT: AQLM {scheme} on {model_short}")
-    print(f"  {args.dataset} PPL: {ppl:.2f}")
     print(f"  Seed: {args.seed}")
     print(f"  Effective bpw: ~{bpw:.4f}")
     print(f"  Quantization time: {quant_time:.1f}s")
+    print(f"  PPL eval datasets: {eval_flags['ppl_datasets']}")
     print(f"{'='*60}")
 
-    dev = torch.device(args.device)
-
-    if args.eval_mmlu:
-        from eval_mmlu import eval_mmlu
-        mmlu_acc = eval_mmlu(model, args.model, dev)
-        _csv(args.dataset, "mmlu_acc", mmlu_acc)
-
-    if args.eval_hellaswag:
-        from eval_hellaswag import eval_hellaswag
-        hellaswag_acc = eval_hellaswag(model, args.model, dev)
-        _csv(args.dataset, "hellaswag_acc", hellaswag_acc)
-
-    if args.eval_arc:
-        from eval_arc import eval_arc
-        arc_results = eval_arc(model, args.model, dev)
-        _csv(args.dataset, "arc_easy_acc", arc_results["ARC-Easy"]["accuracy"])
-        _csv(args.dataset, "arc_challenge_acc", arc_results["ARC-Challenge"]["accuracy"])
-
-    return ppl
+    evaluate_and_log_all(
+        model, args.model, torch.device(args.device),
+        method="aqlm",
+        bpw=bpw, seed=args.seed, blocksize=args.in_group_size,
+        salient_metric="",
+        extra_params=extra,
+        quantization_time_s=quant_time,
+        ppl_datasets=eval_flags["ppl_datasets"],
+        eval_mmlu=eval_flags["eval_mmlu"],
+        eval_hellaswag=eval_flags["eval_hellaswag"],
+        eval_arc=eval_flags["eval_arc"],
+        ppl_eval_seqlen=eval_flags["ppl_eval_seqlen"],
+        save_title_prefix=f"aqlm_{scheme}_{model_short}_seed{args.seed}",
+    )
 
 
 if __name__ == '__main__':

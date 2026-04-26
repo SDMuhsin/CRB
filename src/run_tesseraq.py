@@ -4,16 +4,21 @@ ICLR 2025 — Standalone implementation for apples-to-apples comparison with DOM
 
 Based on: https://github.com/Intelligent-Computing-Lab-Panda/TesseraQ
 Paper: https://arxiv.org/abs/2410.19103
+Reference impl: /tmp/tesseraq_source/llmc/compression/quantization/{tesseraq,awq}.py
 
-Core algorithm:
-  1. Asymmetric uniform 2-bit quantization with per-group scales (group_size=128)
-  2. Auto weight clipping for improved quantization ranges
-  3. Progressive adaptive rounding via block reconstruction optimization
-  4. Dequantization scale optimization
+Core algorithm (matches paper's `load_transform: True` W2g128 config):
+  1. AWQ per-channel activation-weighted scale init (20-point grid search per
+     subset, v2 transform: scales = x_max.pow(ratio)).
+  2. Asymmetric uniform 2-bit quantization with per-group scales (group_size=128).
+  3. Auto weight clipping for improved quantization ranges.
+  4. Progressive adaptive rounding via block reconstruction optimization
+     (20 thresholds × 250 iterations; optimizer: Adam + grad-norm clipping;
+     forward pass under bfloat16 autocast).
+  5. Dequantization scale optimization.
 
-NOTE: This runs TesseraQ WITHOUT AWQ initialization (load_transform=False).
-The paper's best results combine TesseraQ + AWQ pre-processing. Without AWQ,
-this represents TesseraQ's core adaptive rounding algorithm in isolation.
+Switches:
+  --use_awq_init (default: True)   AWQ pre-scaling before TesseraQ (paper-faithful).
+  --no_awq_init                    Run PAR-only (legacy behaviour, for ablation).
 
 Usage:
     source env/bin/activate
@@ -38,7 +43,6 @@ import torch.nn.functional as F
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datautils import get_tokenizer, set_seed
-from eval_ppl_utils import llama_eval, opt_eval, qwen_eval
 
 
 # =====================================================================
@@ -255,6 +259,309 @@ def apply_auto_clip(block, quantizer, skip_qk=True):
 
 
 # =====================================================================
+# AWQ Initialization (activation-aware scaling, v2 transform)
+# Ports: /tmp/tesseraq_source/llmc/compression/quantization/awq.py
+#        /tmp/tesseraq_source/llmc/compression/quantization/base_blockwise_quantization.py
+# =====================================================================
+
+
+def get_awq_subsets(block, model_type):
+    """Return AWQ-style subset partitions for a single transformer block.
+
+    Each subset is a list of sibling linears fed by a single `prev_op`
+    (either a LayerNorm/RMSNorm or a previous Linear). `inspect_module` is
+    forwarded during grid search to compute reconstruction loss.
+    """
+    if model_type in ('llama', 'qwen'):
+        subsets = [
+            {
+                'layers': {
+                    'self_attn.q_proj': block.self_attn.q_proj,
+                    'self_attn.k_proj': block.self_attn.k_proj,
+                    'self_attn.v_proj': block.self_attn.v_proj,
+                },
+                'prev_op': block.input_layernorm,
+                'input_layer': 'self_attn.q_proj',
+                'inspect_module': block.self_attn,
+                'has_kwargs': True,
+            },
+            {
+                'layers': {'self_attn.o_proj': block.self_attn.o_proj},
+                'prev_op': block.self_attn.v_proj,
+                'input_layer': 'self_attn.o_proj',
+                'inspect_module': block.self_attn.o_proj,
+                'has_kwargs': False,
+            },
+            {
+                'layers': {
+                    'mlp.gate_proj': block.mlp.gate_proj,
+                    'mlp.up_proj': block.mlp.up_proj,
+                },
+                'prev_op': block.post_attention_layernorm,
+                'input_layer': 'mlp.gate_proj',
+                'inspect_module': block.mlp,
+                'has_kwargs': False,
+            },
+            {
+                'layers': {'mlp.down_proj': block.mlp.down_proj},
+                'prev_op': block.mlp.up_proj,
+                'input_layer': 'mlp.down_proj',
+                'inspect_module': block.mlp.down_proj,
+                'has_kwargs': False,
+            },
+        ]
+        return subsets
+
+    if model_type == 'opt':
+        subsets = [
+            {
+                'layers': {
+                    'self_attn.q_proj': block.self_attn.q_proj,
+                    'self_attn.k_proj': block.self_attn.k_proj,
+                    'self_attn.v_proj': block.self_attn.v_proj,
+                },
+                'prev_op': block.self_attn_layer_norm,
+                'input_layer': 'self_attn.q_proj',
+                'inspect_module': block.self_attn,
+                'has_kwargs': True,
+            },
+            {
+                'layers': {'self_attn.out_proj': block.self_attn.out_proj},
+                'prev_op': block.self_attn.v_proj,
+                'input_layer': 'self_attn.out_proj',
+                'inspect_module': block.self_attn.out_proj,
+                'has_kwargs': False,
+            },
+            {
+                'layers': {'fc1': block.fc1},
+                'prev_op': block.final_layer_norm,
+                'input_layer': 'fc1',
+                'inspect_module': block.fc1,
+                'has_kwargs': False,
+            },
+            {
+                'layers': {'fc2': block.fc2},
+                'prev_op': block.fc1,
+                'input_layer': 'fc2',
+                'inspect_module': block.fc2,
+                'has_kwargs': False,
+            },
+        ]
+        return subsets
+
+    raise ValueError(f"AWQ subsets not defined for model_type={model_type}")
+
+
+@torch.no_grad()
+def _awq_capture_input_feats(block, inps, layer_kwargs, dev, n_calib, layer_names):
+    """Run the block forward and capture inputs at every Linear named in
+    `layer_names`. Returns {name: list[Tensor(seq, hidden)]}."""
+    input_feat = {n: [] for n in layer_names}
+    hooks = []
+    name_to_module = {n: m for n, m in block.named_modules()
+                      if n in layer_names and isinstance(m, nn.Linear)}
+    for name, module in name_to_module.items():
+        def _make_hook(n):
+            def _hook(m, x, y):
+                inp = x[0].detach()
+                # Store without batch dim for memory; paper caps at 128 samples.
+                input_feat[n].append(inp.cpu())
+            return _hook
+        hooks.append(module.register_forward_hook(_make_hook(name)))
+
+    for j in range(n_calib):
+        with torch.cuda.amp.autocast():
+            _ = block(inps[j].unsqueeze(0).to(dev), **layer_kwargs)
+
+    for h in hooks:
+        h.remove()
+    return input_feat
+
+
+@torch.no_grad()
+def _awq_weight_scale(layers):
+    """Per-input-channel weight-scale aggregate across sibling layers.
+    Returns Tensor(in_features,)."""
+    weights = torch.cat([m.weight.detach() for m in layers], dim=0)  # (sum_out, in)
+    abs_w = weights.abs()
+    # Normalize each row (output channel) by its row-max, then average over rows.
+    row_max = abs_w.amax(dim=1, keepdim=True).clamp(min=1e-8)
+    return (abs_w / row_max).mean(dim=0)
+
+
+@torch.no_grad()
+def _awq_apply_scale(scales, prev_op, layers):
+    """Apply AWQ scale: divide prev_op outputs, multiply layer input channels.
+    Paper-faithful for two prev_op kinds:
+      - LayerNorm / RMSNorm (weight and optional bias divided by s)
+      - nn.Linear with out_features == layers[0].in_features (row-wise fc/fc)
+
+    Skips (and returns False) if the fc/fc assertion fails (common for GQA
+    where v_proj.out_features != o_proj.in_features due to KV head sharing).
+    """
+    scales_1d = scales.detach().view(-1).to(prev_op.weight.device).to(prev_op.weight.dtype)
+    is_ln = isinstance(prev_op, (nn.LayerNorm,)) or prev_op.__class__.__name__.endswith(('RMSNorm', 'LayerNorm'))
+
+    if is_ln:
+        prev_op.weight.data.div_(scales_1d)
+        if hasattr(prev_op, 'bias') and prev_op.bias is not None:
+            prev_op.bias.data.div_(scales_1d)
+        for fc in layers:
+            fc.weight.data.mul_(scales_1d.view(1, -1).to(fc.weight.device).to(fc.weight.dtype))
+        return True
+
+    if isinstance(prev_op, nn.Linear):
+        fc2 = layers[0]
+        if prev_op.out_features != fc2.in_features:
+            # GQA v_proj→o_proj or similar; cannot apply a single scale.
+            return False
+        prev_op.weight.data.div_(scales_1d.view(-1, 1).to(prev_op.weight.device).to(prev_op.weight.dtype))
+        if hasattr(prev_op, 'bias') and prev_op.bias is not None:
+            prev_op.bias.data.div_(scales_1d)
+        fc2.weight.data.mul_(scales_1d.view(1, -1).to(fc2.weight.device).to(fc2.weight.dtype))
+        return True
+
+    # Unknown prev_op kind: skip rather than crash.
+    return False
+
+
+@torch.no_grad()
+def awq_search_and_apply(block, subsets, input_feat, quantizer, layer_kwargs,
+                         dev, n_grid=20):
+    """For each subset, grid-search per-channel scale and apply it in place.
+
+    Scale = x_max.pow(ratio) with ratio in [0, 1]; v2 transform (matches paper).
+    Selection: scale minimising ||inspect_module(x_orig) - inspect_module_q(x/s)||^2,
+    where `inspect_module_q` uses fake-quantized layer weights.
+
+    Samples are processed one at a time through `inspect_module` (like LLMC's
+    search_scale_subset). Forwarding the full (n_calib, seqlen, hidden) batch
+    through self_attn blows the O(bsz * heads * seqlen^2) attention memory for
+    bsz=128 seqlen=2048 (~68 GB), so we iterate and accumulate loss.
+    """
+    def _fwd(mod, xt):
+        with torch.cuda.amp.autocast():
+            out = mod(xt, **layer_kwargs) if has_kwargs else mod(xt)
+        if isinstance(out, tuple):
+            out = out[0]
+        return out.float()
+
+    for idx, subset in enumerate(subsets):
+        layers_dict = subset['layers']
+        layers = list(layers_dict.values())
+        prev_op = subset['prev_op']
+        input_name = subset['input_layer']
+        inspect_module = subset['inspect_module']
+        has_kwargs = subset['has_kwargs']
+
+        input_chunks = input_feat[input_name]
+        if len(input_chunks) == 0:
+            print(f"    AWQ subset {idx}: no captured input, skipping")
+            continue
+
+        # Per-channel activation scale (mean |x| across all tokens of all samples).
+        n_tokens_total = 0
+        x_abs_sum = None
+        for chunk in input_chunks:
+            c = chunk.to(dev)
+            if c.dim() == 3:
+                c_flat = c.view(-1, c.shape[-1])
+            elif c.dim() == 2:
+                c_flat = c
+            else:
+                c_flat = c.reshape(-1, c.shape[-1])
+            abs_sum = c_flat.abs().float().sum(dim=0)
+            x_abs_sum = abs_sum if x_abs_sum is None else x_abs_sum + abs_sum
+            n_tokens_total += c_flat.shape[0]
+            del c, c_flat
+        x_max = (x_abs_sum / max(n_tokens_total, 1)).clamp(min=1e-4)
+
+        # Save originals so we can restore after each grid point.
+        saved_prev_w = prev_op.weight.data.clone()
+        saved_prev_b = prev_op.bias.data.clone() if (hasattr(prev_op, 'bias') and prev_op.bias is not None) else None
+        saved_layer_w = [m.weight.data.clone() for m in layers]
+
+        # Original output per-sample (compute once, store on CPU to save VRAM).
+        org_outs_cpu = []
+        for chunk in input_chunks:
+            c = chunk.to(dev)
+            c_in = c if c.dim() == 3 else c.unsqueeze(0)
+            out = _fwd(inspect_module, c_in)
+            org_outs_cpu.append(out.detach().cpu())
+            del c, c_in, out
+        torch.cuda.empty_cache()
+
+        best_err = float('inf')
+        best_scales = None
+        grid_broken = False
+        for n in range(n_grid):
+            ratio = n / n_grid
+            scales = x_max.pow(ratio).clamp(min=1e-4)
+            scales = scales / (scales.max() * scales.min()).sqrt()
+            scales_t = scales.to(prev_op.weight.dtype)
+
+            applied = _awq_apply_scale(scales_t, prev_op, layers)
+            if not applied:
+                grid_broken = True
+                break
+
+            # Fake-quantize layers' weights (trial).
+            qweights_before = [m.weight.data.clone() for m in layers]
+            for fc in layers:
+                fc_scales, fc_zeros = quantizer.compute_qparams(fc.weight.data.float())
+                q = quantizer.fake_quant(fc.weight.data.float(), fc_scales, fc_zeros)
+                fc.weight.data.copy_(q.to(fc.weight.dtype))
+
+            # Per-sample forward with scaled input; accumulate MSE.
+            err_sum = 0.0
+            err_count = 0
+            scale_dev = scales.to(dev).float()
+            for i, chunk in enumerate(input_chunks):
+                c = chunk.to(dev)
+                c_in = c if c.dim() == 3 else c.unsqueeze(0)
+                c_scaled = (c_in.float() / scale_dev.view(1, 1, -1)).to(c_in.dtype)
+                new_out = _fwd(inspect_module, c_scaled)
+                tgt = org_outs_cpu[i].to(dev)
+                err_sum += (new_out - tgt).pow(2).mean().item() * new_out.numel()
+                err_count += new_out.numel()
+                del c, c_in, c_scaled, new_out, tgt
+            err = err_sum / max(err_count, 1)
+
+            # Restore.
+            for m, saved_w in zip(layers, qweights_before):
+                m.weight.data.copy_(saved_w)
+            prev_op.weight.data.copy_(saved_prev_w)
+            if saved_prev_b is not None:
+                prev_op.bias.data.copy_(saved_prev_b)
+            for m, saved_w in zip(layers, saved_layer_w):
+                m.weight.data.copy_(saved_w)
+
+            if err < best_err:
+                best_err = err
+                best_scales = scales.clone()
+
+        del org_outs_cpu
+        torch.cuda.empty_cache()
+
+        if grid_broken or best_scales is None:
+            continue
+
+        # Apply best scale permanently; divide captured inputs for downstream use.
+        _awq_apply_scale(best_scales.to(prev_op.weight.dtype), prev_op, layers)
+        for name in layers_dict:
+            if name in input_feat:
+                divisor_shape = (1, 1, -1)
+                divisor_cpu = best_scales.view(*divisor_shape).cpu()
+                input_feat[name] = [(inp.float() / divisor_cpu).to(inp.dtype)
+                                    for inp in input_feat[name]]
+
+        del saved_prev_w, saved_layer_w
+        if saved_prev_b is not None:
+            del saved_prev_b
+        torch.cuda.empty_cache()
+
+
+# =====================================================================
 # Model Architecture Helpers
 # =====================================================================
 
@@ -445,13 +752,17 @@ class TesseraQOptimizer:
     ]
 
     def __init__(self, quantizer, lr=0.001, scale_lr=0.001, iterations=250,
-                 batch_size=4, optimize_scale=True):
+                 batch_size=4, optimize_scale=True, use_awq_init=True,
+                 model_type='llama', grad_clip=1.0):
         self.quantizer = quantizer
         self.lr = lr
         self.scale_lr = scale_lr
         self.iterations = iterations
         self.batch_size = batch_size
         self.optimize_scale = optimize_scale
+        self.use_awq_init = use_awq_init
+        self.model_type = model_type
+        self.grad_clip = grad_clip
         self.sigmoid = RectifiedSigmoid().cuda()
 
     def optimize_block(self, block, inps, layer_kwargs, dev, n_calib):
@@ -462,28 +773,51 @@ class TesseraQOptimizer:
         """
         model_dtype = next(block.parameters()).dtype
         block = block.to(dev)
-        # Keep block in model dtype (float16/bfloat16) to preserve attention mask
-        # compatibility. FakeQuantLinear does quantization math in float32 internally.
+        # Paper promotes block to FP32 during training; inputs are bfloat16
+        # and forward runs under bfloat16 autocast. FP32 weights reduce
+        # quantization precision loss during progressive rounding.
+        with torch.no_grad():
+            block.float()
 
         # Freeze all block parameters
         for p in block.parameters():
             p.requires_grad_(False)
 
-        # 1. Collect FP16 target outputs (sample-by-sample to save memory)
-        print("    Collecting FP16 targets...")
-        fp16_outs = []
+        # 1. Collect FP targets (in autocast to match training dtype).
+        print("    Collecting FP targets...")
+        fp_outs = []
         with torch.no_grad():
             for j in range(n_calib):
-                with torch.cuda.amp.autocast():
-                    out = block(inps[j].unsqueeze(0).to(dev), **layer_kwargs)[0]
-                fp16_outs.append(out.float().cpu())
-        fp16_outs = torch.cat(fp16_outs, dim=0)  # (n_calib, seqlen, hidden)
+                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                    out = block(inps[j].unsqueeze(0).to(dev), **layer_kwargs)
+                out = out[0] if isinstance(out, tuple) else out
+                fp_outs.append(out.squeeze(0).float().cpu())
+        fp_outs = torch.stack(fp_outs, dim=0)  # (n_calib, seqlen, hidden)
 
-        # 2. Auto-clip weights (in float32 for precision, then back to model dtype)
+        # 1b. AWQ initialization (paper-faithful `load_transform: True`).
+        # Applies per-subset scale = x_max.pow(ratio) chosen by 20-point grid
+        # search to minimize inspect-module reconstruction loss under fake-
+        # quant. Modifies block weights in-place; block still computes the
+        # same function up to quantization.
+        if self.use_awq_init:
+            print("    AWQ init (grid-search per-subset scales)...")
+            subsets = get_awq_subsets(block, self.model_type)
+            layer_names_of_interest = []
+            for s in subsets:
+                layer_names_of_interest.extend(list(s['layers'].keys()))
+            input_feat = _awq_capture_input_feats(
+                block, inps, layer_kwargs, dev, n_calib, layer_names_of_interest,
+            )
+            awq_search_and_apply(
+                block, subsets, input_feat, self.quantizer, layer_kwargs, dev,
+                n_grid=20,
+            )
+            del input_feat
+            torch.cuda.empty_cache()
+
+        # 2. Auto-clip weights (weight is already FP32 after block.float())
         print("    Auto-clipping weights...")
         linears = get_linear_layers(block)
-        for name, linear in linears.items():
-            linear.weight.data = linear.weight.data.float()
         apply_auto_clip(block, self.quantizer)
 
         # 3. Replace nn.Linear modules with FakeQuantLinear
@@ -498,8 +832,6 @@ class TesseraQOptimizer:
                 linear, self.quantizer, scales, zeros, self.sigmoid,
                 optimize_scale=self.optimize_scale,
             )
-            # Restore original linear weight to model dtype
-            linear.weight.data = linear.weight.data.to(model_dtype)
             original_linears[name] = linear
             fq_linears[name] = fql
             set_module_by_name(block, name, fql)
@@ -507,13 +839,15 @@ class TesseraQOptimizer:
         # 4. Evaluate loss before optimization
         with torch.no_grad():
             loss_before = self._compute_loss_batched(
-                block, inps[:4].to(dev), fp16_outs[:4].to(dev), layer_kwargs
+                block, inps[:4].to(dev), fp_outs[:4].to(dev), layer_kwargs
             )
             print(f"    Loss before TesseraQ: {loss_before.item():.6f}")
 
         # 5. Progressive adaptive rounding optimization
-        all_inps = inps.to(dev)  # (n_calib, seqlen, hidden) in model dtype
-        all_targets = fp16_outs.to(dev)  # float32 targets
+        # Clone+detach to break any lingering autograd graph references from
+        # Catcher / earlier block forward passes.
+        all_inps = inps.to(dev).detach().clone()
+        all_targets = fp_outs.to(dev).detach().clone()
 
         for t_idx, threshold in enumerate(self.THRESHOLDS):
             # Enable rounding optimization mode
@@ -543,19 +877,19 @@ class TesseraQOptimizer:
                 })
             optimizer = torch.optim.Adam(opt_groups, lr=self.lr)
 
-            # Optimize for self.iterations steps
-            # NOTE: autocast is intentionally NOT used here. The FakeQuantLinear
-            # does quantization math in float32 internally and casts output to
-            # input dtype. Using autocast causes graph retention issues with
-            # multi-sample loss computation.
+            # Paper forward uses bfloat16 autocast (`deactive_amp: False`) and
+            # grad-norm clipping (`NativeScalerWithGradNormCount` → clip_grad_norm_).
+            all_params = params_r + params_s
             with torch.enable_grad():
                 for it in range(self.iterations):
                     indices = torch.randperm(n_calib)[:self.batch_size]
+                    inp_batch = all_inps[indices].detach()
+                    tgt_batch = all_targets[indices].detach()
 
-                    loss = self._compute_loss_batched(
-                        block, all_inps[indices], all_targets[indices],
-                        layer_kwargs,
-                    )
+                    with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                        loss = self._compute_loss_batched(
+                            block, inp_batch, tgt_batch, layer_kwargs,
+                        )
 
                     if not math.isfinite(loss.item()):
                         print(f"    WARNING: NaN loss at step {t_idx}, iter {it}")
@@ -563,6 +897,8 @@ class TesseraQOptimizer:
 
                     optimizer.zero_grad()
                     loss.backward()
+                    if self.grad_clip is not None and self.grad_clip > 0:
+                        torch.nn.utils.clip_grad_norm_(all_params, self.grad_clip)
                     optimizer.step()
 
             # Detach gradients
@@ -587,7 +923,8 @@ class TesseraQOptimizer:
             )
             print(f"    Loss after TesseraQ: {loss_after.item():.6f}")
 
-        # 8. Merge rounding into weights and restore original nn.Linear modules
+        # 8. Merge rounding into weights and restore original nn.Linear modules.
+        #    Also demote block back to model_dtype to free FP32 memory.
         with torch.no_grad():
             for name, fql in fq_linears.items():
                 r = self.sigmoid(fql.buf_rounding)
@@ -597,43 +934,54 @@ class TesseraQOptimizer:
                 w_q = self.quantizer.fake_quant_with_rounding(
                     fql.weight, fql.scales, fql.zeros, r, osf
                 )
-                # Write quantized weights back to original linear
+                # Write quantized weights back to original linear (cast to model_dtype).
                 orig_linear = original_linears[name]
-                orig_linear.weight.data.copy_(w_q.to(model_dtype))
+                orig_linear.weight.data = w_q.to(model_dtype)
                 set_module_by_name(block, name, orig_linear)
+            # Demote other FP32 params (LayerNorms) back to model_dtype.
+            for p in block.parameters():
+                if p.dtype != model_dtype:
+                    p.data = p.data.to(model_dtype)
 
         # 9. Compute quantized outputs for next block (using merged weights)
         print("    Computing quantized outputs...")
         outs = torch.zeros_like(inps)
         with torch.no_grad():
             for j in range(n_calib):
-                outs[j] = block(
-                    inps[j].unsqueeze(0).to(dev), **layer_kwargs
-                )[0].cpu()
+                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                    out = block(
+                        inps[j].unsqueeze(0).to(dev), **layer_kwargs
+                    )
+                out = out[0] if isinstance(out, tuple) else out
+                outs[j] = out.squeeze(0).to(inps.dtype).cpu()
 
         # Cleanup
         block.cpu()
-        del all_inps, all_targets, fp16_outs, fq_linears, original_linears
+        del all_inps, all_targets, fp_outs, fq_linears, original_linears
         gc.collect()
         torch.cuda.empty_cache()
 
         return outs
 
     def _compute_loss_batched(self, block, inps, targets, layer_kwargs):
-        """L2 reconstruction loss.
+        """L2 reconstruction loss with true batched forward.
 
-        Processes one sample at a time to avoid attention_mask broadcasting
-        issues, then averages.
+        Paper (`NativeScalerWithGradNormCount`, `batch_size=4`) forwards the
+        full batch in a single call. Broadcasts the (1,1,S,S) attention mask
+        to the batch dim when present to avoid shape mismatch.
+
+        transformers 5.x LlamaDecoderLayer returns a bare Tensor; older
+        versions return (hidden_states, ...). Handle both.
         """
-        batch_size = inps.shape[0]
-        losses = []
-        for j in range(batch_size):
-            inp_j = inps[j].unsqueeze(0).detach()
-            tgt_j = targets[j].unsqueeze(0).detach()
-            out = block(inp_j, **layer_kwargs)[0].float()
-            loss_j = (tgt_j - out).pow(2).sum(-1).mean()
-            losses.append(loss_j)
-        return torch.stack(losses).mean()
+        bsz = inps.shape[0]
+        kwargs = dict(layer_kwargs)
+        am = kwargs.get('attention_mask', None)
+        if am is not None and isinstance(am, torch.Tensor) and am.dim() == 4 and am.shape[0] == 1 and bsz > 1:
+            kwargs['attention_mask'] = am.expand(bsz, *am.shape[1:])
+        out = block(inps, **kwargs)
+        out = out[0] if isinstance(out, tuple) else out
+        out = out.float()
+        return (targets - out).pow(2).sum(-1).mean()
 
     def _update_masks(self, fq_linears, quantile_threshold):
         """Freeze confident rounding decisions (progressive hardening)."""
@@ -727,6 +1075,8 @@ def tesseraq_quantize(model, trainloader, args):
     quantizer = UniformQuantizer(
         bit=args.bit, group_size=args.group_size, symmetric=False
     )
+    model_type = detect_model_type(model)
+    print(f"AWQ init: {args.use_awq_init}  Model type: {model_type}")
     optimizer = TesseraQOptimizer(
         quantizer,
         lr=args.lr,
@@ -734,6 +1084,9 @@ def tesseraq_quantize(model, trainloader, args):
         iterations=args.iterations,
         batch_size=args.batch_size,
         optimize_scale=args.optimize_scale,
+        use_awq_init=args.use_awq_init,
+        model_type=model_type,
+        grad_clip=args.grad_clip,
     )
 
     total_start = time.time()
@@ -753,23 +1106,6 @@ def tesseraq_quantize(model, trainloader, args):
     total_time = time.time() - total_start
     print(f"\nTotal quantization time: {total_time:.1f}s")
     return model
-
-
-def evaluate_ppl(model, testenc, args):
-    """Evaluate perplexity using our standard evaluation code."""
-    dev = torch.device(args.device)
-    model_type = detect_model_type(model)
-    model_short = args.model.split('/')[-1]
-    dataset = getattr(args, 'dataset', 'wikitext2')
-    save_title = f"tesseraq_W{args.bit}g{args.group_size}_{model_short}_{dataset}_seed{args.seed}"
-
-    if model_type == 'opt':
-        ppl = opt_eval(model, testenc, dev, dataset, save_title=save_title)
-    elif model_type == 'llama':
-        ppl = llama_eval(model, testenc, dev, dataset, save_title=save_title)
-    elif model_type == 'qwen':
-        ppl = qwen_eval(model, testenc, dev, dataset, save_title=save_title)
-    return ppl
 
 
 def main():
@@ -793,12 +1129,16 @@ def main():
     parser.add_argument('--optimize_scale', action='store_true', default=True)
     parser.add_argument('--no_optimize_scale', dest='optimize_scale',
                         action='store_false')
-    parser.add_argument('--eval_arc', action='store_true')
-    parser.add_argument('--eval_mmlu', action='store_true')
-    parser.add_argument('--eval_hellaswag', action='store_true')
-    args = parser.parse_args()
-
+    parser.add_argument('--use_awq_init', action='store_true', default=True,
+                        help='AWQ per-subset scale init (paper-faithful, default on).')
+    parser.add_argument('--no_awq_init', dest='use_awq_init', action='store_false',
+                        help='Disable AWQ init (PAR-only legacy mode).')
+    parser.add_argument('--grad_clip', type=float, default=1.0,
+                        help='Max grad norm for NativeScalerWithGradNormCount-equivalent clipping.')
     from csv_utils import append_result as csv_append
+    from eval_utils import add_eval_cli, resolve_eval_flags, evaluate_and_log_all
+    add_eval_cli(parser)
+    args = parser.parse_args()
 
     set_seed(args.seed)
     torch.manual_seed(args.seed)
@@ -817,48 +1157,34 @@ def main():
     quant_time = time.time() - tick
 
     bpw = args.bit + (32 / args.group_size)
-    extra = {"bit": args.bit, "group_size": args.group_size, "iterations": args.iterations}
-    def _csv(dataset, metric, value):
-        csv_append(model=args.model, method="tesseraq", dataset=dataset,
-                   metric=metric, value=value, bpw=bpw, seed=args.seed,
-                   blocksize=args.group_size, salient_metric="",
-                   extra_params=extra, quantization_time_s=quant_time)
-
-    print(f"\n{'='*60}")
-    print(f"Evaluating perplexity on {args.dataset}...")
-    print(f"{'='*60}")
-    ppl = evaluate_ppl(model, testenc, args)
-    _csv(args.dataset, "perplexity", ppl)
+    extra = {"bit": args.bit, "group_size": args.group_size, "iterations": args.iterations,
+             "awq_init": args.use_awq_init, "grad_clip": args.grad_clip}
+    eval_flags = resolve_eval_flags(args, primary_dataset=args.dataset)
 
     model_short = args.model.split('/')[-1]
     print(f"\n{'='*60}")
     print(f"RESULT: TesseraQ W{args.bit}g{args.group_size} on {model_short}")
-    print(f"  {args.dataset} PPL: {ppl:.2f}")
     print(f"  Seed: {args.seed}")
     print(f"  Calibration: {args.nsamples} samples")
     print(f"  Effective bpw: ~{bpw:.2f}")
     print(f"  Quantization time: {quant_time:.1f}s")
+    print(f"  PPL eval datasets: {eval_flags['ppl_datasets']}")
     print(f"{'='*60}")
 
-    dev = torch.device(args.device)
-
-    if args.eval_mmlu:
-        from eval_mmlu import eval_mmlu
-        mmlu_acc = eval_mmlu(model, args.model, dev)
-        _csv(args.dataset, "mmlu_acc", mmlu_acc)
-
-    if args.eval_hellaswag:
-        from eval_hellaswag import eval_hellaswag
-        hellaswag_acc = eval_hellaswag(model, args.model, dev)
-        _csv(args.dataset, "hellaswag_acc", hellaswag_acc)
-
-    if args.eval_arc:
-        from eval_arc import eval_arc
-        arc_results = eval_arc(model, args.model, dev)
-        _csv(args.dataset, "arc_easy_acc", arc_results["ARC-Easy"]["accuracy"])
-        _csv(args.dataset, "arc_challenge_acc", arc_results["ARC-Challenge"]["accuracy"])
-
-    return ppl
+    evaluate_and_log_all(
+        model, args.model, torch.device(args.device),
+        method="tesseraq",
+        bpw=bpw, seed=args.seed, blocksize=args.group_size,
+        salient_metric="",
+        extra_params=extra,
+        quantization_time_s=quant_time,
+        ppl_datasets=eval_flags["ppl_datasets"],
+        eval_mmlu=eval_flags["eval_mmlu"],
+        eval_hellaswag=eval_flags["eval_hellaswag"],
+        eval_arc=eval_flags["eval_arc"],
+        ppl_eval_seqlen=eval_flags["ppl_eval_seqlen"],
+        save_title_prefix=f"tesseraq_W{args.bit}g{args.group_size}_{model_short}_seed{args.seed}",
+    )
 
 
 if __name__ == '__main__':

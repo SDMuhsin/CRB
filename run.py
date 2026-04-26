@@ -12,6 +12,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 from csv_utils import append_result as _csv_append
+from eval_utils import add_eval_cli, resolve_eval_flags, evaluate_and_log_all
 
 
 downloads_dir = os.environ.get("BILLM_DOWNLOADS_DIR", "./downloads")
@@ -35,7 +36,7 @@ def get_model(model_name):
             from transformers import OPTForCausalLM
             model = OPTForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
             model.seqlen = model.config.max_position_embeddings
-        elif "llama" in model_name or "danube" in model_name.lower():
+        elif "llama" in model_name.lower() or "danube" in model_name.lower():
             from transformers import LlamaForCausalLM
             model = LlamaForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
             model.seqlen = 2048
@@ -144,7 +145,7 @@ def quant_sequential(model, dataloader, dev):
             and model.model.decoder.project_in
         ):
             model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
-    elif "llama" in args.model or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
         layers = model.model.layers
         model.model.embed_tokens = model.model.embed_tokens.to(dev)
         model.model.norm = model.model.norm.to(dev)
@@ -213,7 +214,7 @@ def quant_sequential(model, dataloader, dev):
             and model.model.decoder.project_in
         ):
             model.model.decoder.project_in = model.model.decoder.project_in.cpu()
-    elif "llama" in args.model or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
         model.model.embed_tokens = model.model.embed_tokens.cpu()
         model.model.norm = model.model.norm.cpu()
         if hasattr(model.model, "rotary_emb"):
@@ -291,12 +292,14 @@ def quant_sequential(model, dataloader, dev):
                     info = gptq[name].fasterquant(
                         percdamp=args.percdamp,
                         blocksize=args.blocksize,
+                        partition=args.partition,
                         orders=(gu_order, gu_order, gu_order),
                     )
                 else:
                     info = gptq[name].fasterquant(
                         percdamp=args.percdamp,
                         blocksize=args.blocksize,
+                        partition=args.partition,
                     )
                 gptq[name].free()
 
@@ -365,6 +368,8 @@ def quant_sequential(model, dataloader, dev):
                     info = gptq[name].fasterquant(
                         percdamp=args.percdamp,
                         blocksize=args.blocksize,
+                        partition=args.partition,
+                        global_scale=args.global_scale,
                     )
                 gptq[name].free()
 
@@ -464,7 +469,7 @@ def sbh_sequential(model, dataloader, dev, r_attn=60, r_mlp=30):
             model.model.decoder.project_out = model.model.decoder.project_out.to(dev)
         if hasattr(model.model.decoder, "project_in") and model.model.decoder.project_in:
             model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
-    elif "llama" in args.model or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
         layers = model.model.layers
         model.model.embed_tokens = model.model.embed_tokens.to(dev)
         model.model.norm = model.model.norm.to(dev)
@@ -514,7 +519,7 @@ def sbh_sequential(model, dataloader, dev, r_attn=60, r_mlp=30):
     if "opt" in args.model:
         model.model.decoder.embed_tokens = model.model.decoder.embed_tokens.cpu()
         model.model.decoder.embed_positions = model.model.decoder.embed_positions.cpu()
-    elif "llama" in args.model or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
         model.model.embed_tokens = model.model.embed_tokens.cpu()
         model.model.norm = model.model.norm.cpu()
         if hasattr(model.model, "rotary_emb"):
@@ -602,7 +607,7 @@ def mixed_sequential(model, dataloader, dev):
         layers = model.model.decoder.layers
         model.model.decoder.embed_tokens = model.model.decoder.embed_tokens.to(dev)
         model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(dev)
-    elif "llama" in args.model or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
         layers = model.model.layers
         model.model.embed_tokens = model.model.embed_tokens.to(dev)
         model.model.norm = model.model.norm.to(dev)
@@ -651,7 +656,7 @@ def mixed_sequential(model, dataloader, dev):
     if "opt" in args.model:
         model.model.decoder.embed_tokens = model.model.decoder.embed_tokens.cpu()
         model.model.decoder.embed_positions = model.model.decoder.embed_positions.cpu()
-    elif "llama" in args.model or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
         model.model.embed_tokens = model.model.embed_tokens.cpu()
         model.model.norm = model.model.norm.cpu()
         if hasattr(model.model, "rotary_emb"):
@@ -770,7 +775,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "low_quant_method",
         type=str,
-        choices=['fp16','rtn',"xnor", "sign", "no", "2bit", "4bit", "prune", "braq",'robq','mestrobq','medianbraq','orb','whor','arb','bhor','jrb','crb','crb_norefine','crb_symdamp','crb_symdamp_norefine','crb_resrhs','crb_resrhs_norefine','crb_seqalpha','crb_seqalpha_norefine','crb_adaptive','crb_hessian','crb_native','odr','new','ahor','crbv8','crbv9','crbv10','crbog','secq','sbh','ternary','mixed','doml','doml_binary'],
+        choices=['fp16','rtn',"xnor", "sign", "no", "2bit", "3bit", "4bit", "prune", "braq",'robq','mestrobq','medianbraq','orb','whor','arb','bhor','jrb','crb','crb_norefine','crb_symdamp','crb_symdamp_norefine','crb_resrhs','crb_resrhs_norefine','crb_seqalpha','crb_seqalpha_norefine','crb_adaptive','crb_hessian','crb_native','odr','new','ahor','crbv8','crbv9','crbv10','crbog','secq','sbh','ternary','mixed','doml','doml_binary'],
         help="quantization method; `xnor` is the method using XNOR to adapt hardware calculation; `prune` is the method used in sparseGPTQ; braq is the method used in BiLLM",
     )
     parser.add_argument("--load_quantized", action="store_true")
@@ -806,6 +811,24 @@ if __name__ == "__main__":
         type=str,
         default="magnitude",
         choices=["magnitude", "hessian"],
+    )
+    parser.add_argument(
+        "--partition",
+        type=int,
+        default=3,
+        choices=[1, 3],
+        help="Structural partition count. 3 = DOML/BRAQ salient/non-salient split "
+             "(default). 1 = single per-block mask, equivalent to paper-faithful "
+             "per-row GPTQ (combine with a large --blocksize for true no-groupsize "
+             "GPTQ). Ignored for doml/doml_binary (always 3).",
+    )
+    parser.add_argument(
+        "--global_scale",
+        action="store_true",
+        help="For --low_quant_method 2bit/4bit only: compute per-row scale ONCE "
+             "on the full weight matrix (paper Table 3 GPTQ no-groupsize). Without "
+             "this, per-row scale is recomputed per GPTQ block (paper Table 7 "
+             "gs=blocksize).",
     )
     parser.add_argument(
         "--device",
@@ -881,21 +904,8 @@ if __name__ == "__main__":
         action="store_true",
         help="Also evaluate Mean Reciprocal Rank (MRR) on Yelp Review Full test set.",
     )
-    parser.add_argument(
-        "--eval_mmlu",
-        action="store_true",
-        help="Also evaluate on MMLU (5-shot multiple choice across 57 subjects).",
-    )
-    parser.add_argument(
-        "--eval_hellaswag",
-        action="store_true",
-        help="Also evaluate on HellaSwag (commonsense sentence completion).",
-    )
-    parser.add_argument(
-        "--eval_arc",
-        action="store_true",
-        help="Also evaluate on ARC (AI2 Reasoning Challenge, Easy + Challenge).",
-    )
+    # --eval_mmlu / --eval_hellaswag / --eval_arc plus --full_eval and
+    # --eval_extra_ppl are added below by add_eval_cli(parser).
     parser.add_argument(
         "--eval_humaneval",
         action="store_true",
@@ -930,6 +940,7 @@ if __name__ == "__main__":
         "--sbh_r_mlp", type=int, default=30,
         help="SBH: SVD rank for MLP sublayers (gate,up,down).",
     )
+    add_eval_cli(parser)
     args = parser.parse_args()
     groupsize = args.blocksize
 
@@ -1006,186 +1017,61 @@ if __name__ == "__main__":
     '''
 
 
-    for dataset in [args.dataset]:#["wikitext2", "ptb", "c4"]:
-        dataloader, testloader = get_loaders(
-            dataset, seed=args.seed, seqlen=model.seqlen, model=args.model
-        )
-        print(dataset)
-        if "opt" in args.model:
-            from eval_ppl_utils import opt_eval
-            
-            ppl = opt_eval(model, testloader, device, dataset, args.log_wandb, save_title, save = not args.skip_ppl_save )
-            _csv(dataset, "perplexity", ppl)
+    # ------------------------------------------------------------------
+    # Standard eval suite — PPL on (args.dataset [+ extras]) + downstream
+    # benchmarks (MMLU / HellaSwag / ARC). Each result is one CSV row.
+    # ------------------------------------------------------------------
+    eval_flags = resolve_eval_flags(args, primary_dataset=args.dataset)
+    evaluate_and_log_all(
+        model, args.model, device,
+        method=args.low_quant_method,
+        bpw=_run_bpw, seed=args.seed, blocksize=groupsize,
+        salient_metric=args.salient_metric,
+        extra_params={"corr_damp": args.corr_damp, "lam": args.lam,
+                      "coupling": args.coupling},
+        quantization_time_s=_quant_time,
+        ppl_datasets=eval_flags["ppl_datasets"],
+        eval_mmlu=eval_flags["eval_mmlu"],
+        eval_hellaswag=eval_flags["eval_hellaswag"],
+        eval_arc=eval_flags["eval_arc"],
+        ppl_eval_seqlen=eval_flags["ppl_eval_seqlen"],
+        save_title_prefix=save_title.replace("/", "_"),
+    )
 
-            ''' FOR ABLATION STUDY '''
-            # Define the path to the JSON file
-            results_path = "./output/ablation_results.json"
-
-            # Ensure the results directory exists
-            os.makedirs(os.path.dirname(results_path), exist_ok=True)
-
-            # Load existing results or initialize an empty dict if file doesn't exist or is empty
-            try:
-                with open(results_path, "r") as f:
-                    results = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                results = {}
-
-            # Create the key and update the results with the new perplexity value
-            key = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_{args.corr_damp}_{args.lam}"
-            results[key] = ppl
-
-            # Save the updated results back to the JSON file
-            with open(results_path, "w") as f:
-                json.dump(results, f, indent=4)
-
-
-        elif "llama" in args.model or "danube" in args.model.lower():
-            from eval_ppl_utils import llama_eval
-
-            ppl = llama_eval(model, testloader, device, dataset, args.log_wandb, save_title, save = not args.skip_ppl_save)
-            _csv(dataset, "perplexity", ppl)
-
-            # Save to ablation results
-            results_path = "./output/ablation_results.json"
-            os.makedirs(os.path.dirname(results_path), exist_ok=True)
-            try:
-                with open(results_path, "r") as f:
-                    results = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                results = {}
-            key = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_{args.corr_damp}_{args.lam}"
-            results[key] = ppl
-            with open(results_path, "w") as f:
-                json.dump(results, f, indent=4)
-
-        elif "granite" in args.model.lower():
-            from eval_ppl_utils import granite_eval
-
-            ppl = granite_eval(model, testloader, device, dataset, args.log_wandb, save_title, save = not args.skip_ppl_save)
-            _csv(dataset, "perplexity", ppl)
-
-            # Save to ablation results
-            results_path = "./output/ablation_results.json"
-            os.makedirs(os.path.dirname(results_path), exist_ok=True)
-            try:
-                with open(results_path, "r") as f:
-                    results = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                results = {}
-            key = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_{args.corr_damp}_{args.lam}"
-            results[key] = ppl
-            with open(results_path, "w") as f:
-                json.dump(results, f, indent=4)
-
-        elif "qwen" in args.model.lower() or "smollm" in args.model.lower():
-            from eval_ppl_utils import qwen_eval
-
-            ppl = qwen_eval(model, testloader, device, dataset, args.log_wandb, save_title, save = not args.skip_ppl_save)
-            _csv(dataset, "perplexity", ppl)
-
-            # Save to ablation results
-            results_path = "./output/ablation_results.json"
-            os.makedirs(os.path.dirname(results_path), exist_ok=True)
-            try:
-                with open(results_path, "r") as f:
-                    results = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                results = {}
-            key = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_{args.corr_damp}_{args.lam}"
-            results[key] = ppl
-            with open(results_path, "w") as f:
-                json.dump(results, f, indent=4)
-
-        elif "pythia" in args.model.lower():
-            from eval_ppl_utils import pythia_eval
-
-            ppl = pythia_eval(model, testloader, device, dataset, args.log_wandb, save_title, save = not args.skip_ppl_save)
-            _csv(dataset, "perplexity", ppl)
-
-            # Save to ablation results
-            results_path = "./output/ablation_results.json"
-            os.makedirs(os.path.dirname(results_path), exist_ok=True)
-            try:
-                with open(results_path, "r") as f:
-                    results = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                results = {}
-            key = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_{args.corr_damp}_{args.lam}"
-            results[key] = ppl
-            with open(results_path, "w") as f:
-                json.dump(results, f, indent=4)
-
-        elif "bloom" in args.model.lower():
-            from eval_ppl_utils import bloom_eval
-
-            ppl = bloom_eval(model, testloader, device, dataset, args.log_wandb, save_title, save = not args.skip_ppl_save)
-            _csv(dataset, "perplexity", ppl)
-
-            # Save to ablation results
-            results_path = "./output/ablation_results.json"
-            os.makedirs(os.path.dirname(results_path), exist_ok=True)
-            try:
-                with open(results_path, "r") as f:
-                    results = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                results = {}
-            key = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_{args.corr_damp}_{args.lam}"
-            results[key] = ppl
-            with open(results_path, "w") as f:
-                json.dump(results, f, indent=4)
-
+    # ------------------------------------------------------------------
+    # OPT-only legacy benchmarks (no CSV writes; left in for backcompat)
+    # ------------------------------------------------------------------
     if args.eval_lambada and "opt" in args.model:
         from eval_lambada import opt_eval_lambada
-        lambada_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_LAMBADA"
+        lambada_title = f"{save_title}_LAMBADA"
         opt_eval_lambada(model, args.model, device, save_title=lambada_title)
 
     if args.eval_mrr and "opt" in args.model:
         from eval_mrr import opt_eval_mrr
-        mrr_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_MRR"
-        opt_eval_mrr(model, args.model, device, save_title=mrr_title)
+        opt_eval_mrr(model, args.model, device,
+                     save_title=f"{save_title}_MRR")
 
     if args.eval_mrr_agnews and "opt" in args.model:
         from eval_mrr_agnews import opt_eval_mrr_agnews
-        agnews_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_MRR_AGNEWS"
-        opt_eval_mrr_agnews(model, args.model, device, save_title=agnews_title)
+        opt_eval_mrr_agnews(model, args.model, device,
+                            save_title=f"{save_title}_MRR_AGNEWS")
 
     if args.eval_mrr_imdb and "opt" in args.model:
         from eval_mrr_imdb import opt_eval_mrr_imdb
-        imdb_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_MRR_IMDB"
-        opt_eval_mrr_imdb(model, args.model, device, save_title=imdb_title)
+        opt_eval_mrr_imdb(model, args.model, device,
+                          save_title=f"{save_title}_MRR_IMDB")
 
     if args.eval_mrr_yelp and "opt" in args.model:
         from eval_mrr_yelp import opt_eval_mrr_yelp
-        yelp_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_MRR_YELP"
-        opt_eval_mrr_yelp(model, args.model, device, save_title=yelp_title)
-
-    # Model-agnostic benchmarks (work with OPT, LLaMA, Qwen, etc.)
-    if args.eval_mmlu:
-        from eval_mmlu import eval_mmlu
-        mmlu_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_MMLU"
-        mmlu_acc = eval_mmlu(model, args.model, device, save_title=mmlu_title)
-        _csv(args.dataset, "mmlu_acc", mmlu_acc)
-
-    if args.eval_hellaswag:
-        from eval_hellaswag import eval_hellaswag
-        hellaswag_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_HELLASWAG"
-        hellaswag_acc = eval_hellaswag(model, args.model, device, save_title=hellaswag_title)
-        _csv(args.dataset, "hellaswag_acc", hellaswag_acc)
-
-    if args.eval_arc:
-        from eval_arc import eval_arc
-        arc_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_ARC"
-        arc_results = eval_arc(model, args.model, device, save_title=arc_title)
-        _csv(args.dataset, "arc_easy_acc", arc_results["ARC-Easy"]["accuracy"])
-        _csv(args.dataset, "arc_challenge_acc", arc_results["ARC-Challenge"]["accuracy"])
+        opt_eval_mrr_yelp(model, args.model, device,
+                          save_title=f"{save_title}_MRR_YELP")
 
     if args.eval_humaneval:
         from eval_humaneval import eval_humaneval
-        humaneval_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_HUMANEVAL"
-        eval_humaneval(model, args.model, device, save_title=humaneval_title)
+        eval_humaneval(model, args.model, device,
+                       save_title=f"{save_title}_HUMANEVAL")
 
     if args.eval_math:
         from eval_math import eval_math
-        math_title = f"{args.model}_{args.dataset}_{args.low_quant_method}_{groupsize}_{args.salient_metric}_MATH"
-        eval_math(model, args.model, device, save_title=math_title)
+        eval_math(model, args.model, device,
+                  save_title=f"{save_title}_MATH")

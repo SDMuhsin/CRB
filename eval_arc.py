@@ -8,6 +8,9 @@ from datasets import load_dataset
 
 EVAL_SAVE_FILE = "./output/GLOBAL_ARC.json"
 
+# Honor BILLM_DOWNLOADS_DIR so cluster jobs route HF dataset cache to scratch.
+_DATASETS_CACHE = os.path.join(os.environ.get("BILLM_DOWNLOADS_DIR", "./downloads"), "datasets")
+
 
 def save_result(save_title, results):
     """Save ARC results to JSON file with file locking."""
@@ -87,7 +90,7 @@ def eval_arc(model, model_name, dev, save_title='UNNAMED_ARC'):
     for split_name in ["ARC-Easy", "ARC-Challenge"]:
         print(f"\n  Evaluating {split_name} ...")
         dataset = load_dataset("allenai/ai2_arc", split_name, split="test",
-                               cache_dir="./downloads/datasets")
+                               cache_dir=_DATASETS_CACHE)
 
         correct = 0
         total = 0

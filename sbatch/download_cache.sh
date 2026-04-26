@@ -206,32 +206,46 @@ print('Downloading wikitext (wikitext-2-raw-v1)...')
 load_dataset('wikitext', 'wikitext-2-raw-v1')
 print('  Done: wikitext-2')
 
-# C4 shard — use hf_hub_download NOT load_dataset. The latter's config-hash
+# C4 shards — use hf_hub_download NOT load_dataset. The latter's config-hash
 # changes between online pre-warm and offline runtime (resolved URLs differ),
 # which made calibration jobs fail with 'Couldn't find cache for allenai/c4
 # for config default-...'. datautils.get_redpajama reads the .json.gz file
 # directly with gzip + json.loads — it just needs the raw blob present.
-print('Downloading allenai/c4 shard via hf_hub_download...')
-shard = hf_hub_download(
-    repo_id='allenai/c4',
-    filename='en/c4-train.00000-of-01024.json.gz',
-    repo_type='dataset',
-    cache_dir=os.environ['BILLM_DOWNLOADS_DIR'],
-)
-print(f'  C4 shard: {shard}')
-print(f'  Size: {os.path.getsize(shard):,} bytes')
+#
+# Phase 15: also pre-warm the C4 VALIDATION shard for the C4 PPL eval
+# (datautils.get_c4 -> _c4_read_shard).
+for c4_filename in (
+    'en/c4-train.00000-of-01024.json.gz',
+    'en/c4-validation.00000-of-00008.json.gz',
+):
+    print(f'Downloading allenai/c4 {c4_filename}...')
+    shard = hf_hub_download(
+        repo_id='allenai/c4', filename=c4_filename, repo_type='dataset',
+        cache_dir=os.environ['BILLM_DOWNLOADS_DIR'],
+    )
+    print(f'  shard: {shard}  ({os.path.getsize(shard):,} bytes)')
+    # local_files_only=True follow-up to write refs/main (Phase 9 gotcha 22).
+    shard_offline = hf_hub_download(
+        repo_id='allenai/c4', filename=c4_filename, repo_type='dataset',
+        cache_dir=os.environ['BILLM_DOWNLOADS_DIR'], local_files_only=True,
+    )
+    print(f'  offline-verified: {shard_offline}')
 
-# Mirror the Qwen3 refs/main verification for the C4 dataset repo — same
-# latent bug: without local_files_only=True follow-up, the revision ref may
-# not be written and offline resolution will fail.
-shard_offline = hf_hub_download(
-    repo_id='allenai/c4',
-    filename='en/c4-train.00000-of-01024.json.gz',
-    repo_type='dataset',
-    cache_dir=os.environ['BILLM_DOWNLOADS_DIR'],
-    local_files_only=True,
-)
-print(f'  C4 refs/main verified offline -> {shard_offline}')
+# Phase 15: downstream eval datasets (MMLU 5-shot, HellaSwag, ARC).
+# These are datasets-script-format and load via load_dataset(). They live
+# under \$BILLM_DOWNLOADS_DIR/datasets/ to match the cache_dir argument used
+# in eval_*.py (which reads from \$BILLM_DOWNLOADS_DIR + '/datasets').
+DATASETS_CACHE = os.path.join(os.environ['BILLM_DOWNLOADS_DIR'], 'datasets')
+print(f'\\n=== Downstream eval datasets (cache_dir={DATASETS_CACHE}) ===')
+for repo_id, name, kwargs in [
+    ('cais/mmlu', 'MMLU', {'name': 'all'}),
+    ('Rowan/hellaswag', 'HellaSwag', {}),
+    ('allenai/ai2_arc', 'ARC-Easy', {'name': 'ARC-Easy'}),
+    ('allenai/ai2_arc', 'ARC-Challenge', {'name': 'ARC-Challenge'}),
+]:
+    print(f'Downloading {name} ({repo_id})...')
+    load_dataset(repo_id, cache_dir=DATASETS_CACHE, **kwargs)
+    print(f'  OK')
 "
 
 echo ""
