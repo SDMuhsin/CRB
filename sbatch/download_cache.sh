@@ -246,6 +246,29 @@ for repo_id, name, kwargs in [
     print(f'Downloading {name} ({repo_id})...')
     load_dataset(repo_id, cache_dir=DATASETS_CACHE, **kwargs)
     print(f'  OK')
+
+# Phase 15: PTB.
+# The HF \`ptb_text_only\` repo is script-only (no parquet/arrow shards).
+# \`datasets >= 4.x\` no longer supports script loaders, so we cannot rely
+# on \`load_dataset('ptb_text_only', ...)\` on Nibi (or anywhere).
+# We fetch the canonical Mikolov 2010 LM-benchmark splits directly from a
+# stable raw-text URL — same content as the HF Arrow rows after .strip().
+import urllib.request
+PTB_DIR = os.path.join(DATASETS_CACHE, 'ptb_mikolov')
+os.makedirs(PTB_DIR, exist_ok=True)
+PTB_BASE = 'https://raw.githubusercontent.com/wojzaremba/lstm/master/data'
+print(f'\\n=== PTB (Mikolov LM splits, raw text -> {PTB_DIR}) ===')
+for fname in ('ptb.train.txt', 'ptb.test.txt', 'ptb.valid.txt'):
+    out = os.path.join(PTB_DIR, fname.replace('ptb.', '').replace('.txt', '.txt'))
+    # Final filename: train.txt / test.txt / valid.txt (matches _ptb_load_split lookup).
+    out_path = os.path.join(PTB_DIR, fname.split('.')[1] + '.txt')
+    if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+        print(f'  {os.path.basename(out_path)} cached ({os.path.getsize(out_path):,} bytes)')
+        continue
+    url = f'{PTB_BASE}/{fname}'
+    print(f'  fetching {url} -> {out_path}')
+    urllib.request.urlretrieve(url, out_path)
+    print(f'    {os.path.getsize(out_path):,} bytes')
 "
 
 echo ""

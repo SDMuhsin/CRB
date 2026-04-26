@@ -59,40 +59,71 @@ def get_wikitext2(nsamples, seed, seqlen, model, tokenizer):
     return trainloader, testenc
 
 def _ptb_load_split(split):
-    """Load Penn Treebank from local Arrow files.
+    """Load Penn Treebank for split in {'train', 'test', 'validation'} as list[str].
 
-    `datasets >= 4.x` dropped script-based loaders, so `load_dataset('ptb_text_only',
-    'penn_treebank')` raises RuntimeError. Fall back to direct Arrow read of the
-    pre-existing cache populated by an older datasets version. Returns list[str] of
-    sentences.
+    The HF `ptb_text_only` repo is script-only (a single `.py`; no parquet/arrow
+    distribution), and `datasets >= 4.x` dropped script-based loaders entirely
+    (RuntimeError "Dataset scripts are no longer supported"). The downstream
+    repo eugenesiow/etc. don't exist for PTB. So:
+
+      1. Primary path: read raw Mikolov PTB text files from
+         `<downloads_dir>/datasets/ptb_mikolov/{train,test,valid}.txt`.
+         These are the canonical Mikolov 2010 LM-benchmark splits (the same
+         sentences the HF `ptb_text_only` script wraps), pre-warmed by
+         sbatch/download_cache.sh from
+         `https://raw.githubusercontent.com/wojzaremba/lstm/master/data/`.
+         Compared on dev box: 3761 test sentences, content matches the HF
+         Arrow exactly (after `.strip()`).
+      2. Fallback A (legacy): `load_dataset('ptb_text_only', 'penn_treebank')`.
+         Works on environments with `datasets < 4.x` AND the script not yet
+         purged from HF cache. Won't work on dev box.
+      3. Fallback B (legacy): glob pre-existing Arrow files written by the
+         old datasets-script-format loader. Works on dev box where the cache
+         predates the datasets 4.x bump.
     """
+    mikolov_basename = {'train': 'train', 'test': 'test', 'validation': 'valid'}.get(
+        split, split,
+    )
+
+    # Primary: raw Mikolov text files.
+    for root in [downloads_dir, "./downloads"]:
+        path = os.path.join(root, "datasets", "ptb_mikolov", f"{mikolov_basename}.txt")
+        if os.path.isfile(path):
+            with open(path, encoding='utf-8') as f:
+                # Each line is one sentence with leading/trailing whitespace.
+                # The HF `ptb_text_only` Arrow strips the surrounding spaces.
+                return [line.strip() for line in f if line.strip()]
+
+    # Fallback A: legacy datasets-script load (works on datasets < 4.x).
     try:
         ds = load_dataset('ptb_text_only', 'penn_treebank', split=split)
         return list(ds['sentence'])
     except Exception:
         pass
 
-    # Glob the on-disk cache: <root>/datasets/ptb_text_only/penn_treebank/<ver>/<hash>/ptb_text_only-<split>.arrow
+    # Fallback B: legacy Arrow-cache glob.
     import glob
     import pyarrow as pa
     import pyarrow.ipc as ipc
-
     candidates = []
     for root in [downloads_dir, "./downloads"]:
         candidates.extend(glob.glob(os.path.join(
             root, "datasets", "ptb_text_only", "penn_treebank", "*", "*",
             f"ptb_text_only-{split}.arrow",
         )))
-    if not candidates:
-        raise FileNotFoundError(
-            f"PTB Arrow file for split={split!r} not found. Searched under "
-            f"{downloads_dir}/datasets/ptb_text_only and ./downloads/datasets/ptb_text_only. "
-            f"Pre-warm the cache on a node with internet first."
-        )
-    arrow_path = sorted(candidates)[0]
-    with pa.memory_map(arrow_path, 'r') as src:
-        table = ipc.open_stream(src).read_all()
-    return [str(s) for s in table.column('sentence').to_pylist()]
+    if candidates:
+        arrow_path = sorted(candidates)[0]
+        with pa.memory_map(arrow_path, 'r') as src:
+            table = ipc.open_stream(src).read_all()
+        return [str(s) for s in table.column('sentence').to_pylist()]
+
+    raise FileNotFoundError(
+        f"PTB split={split!r} not found. Tried (in order): "
+        f"`<root>/datasets/ptb_mikolov/{mikolov_basename}.txt`, "
+        f"`load_dataset('ptb_text_only', 'penn_treebank')` (fails on datasets >=4.x), "
+        f"and `<root>/datasets/ptb_text_only/penn_treebank/*/*/ptb_text_only-{split}.arrow`. "
+        f"Pre-warm via ./sbatch/download_cache.sh on a node with internet."
+    )
 
 
 def get_ptb(nsamples, seed, seqlen, model, tokenizer):
