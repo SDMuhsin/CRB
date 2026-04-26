@@ -128,16 +128,16 @@ PBLLM_HIGH_BIT=8
 # Qwen3-1.7B. See ./results/qwen3_1.7b_ptq_benchmark.csv for what already
 # landed from the 12539xxx batch. Uncomment a line to re-queue that method.
 techniques=(
-    # "fp16"          # job 12539870 COMPLETED, PPL 16.72
-    # "rtn-2bit"      # job 12539871 COMPLETED, PPL 4.64M (quality collapse, not a crash)
-    # "gptq-2bit"     # job 12539872 COMPLETED, PPL 156k  (quality collapse, not a crash)
-    # "sinq"          # job 12539873 COMPLETED, PPL 30,930
-    # "lnq"           # job 12539874 currently RUNNING on 3g.40gb — do NOT re-queue
-    # "leanquant-nu"  # job 12539875 COMPLETED, PPL 128.81
-    # "tesseraq"    # job 12547248 currently RUNNING on full h100 (MIG fix) — do NOT re-queue
+    "fp16"          # job 12539870 COMPLETED, PPL 16.72
+    "rtn-2bit"      # job 12539871 COMPLETED, PPL 4.64M (quality collapse, not a crash)
+    "gptq-2bit"     # job 12539872 COMPLETED, PPL 156k  (quality collapse, not a crash)
+    "sinq"          # job 12539873 COMPLETED, PPL 30,930
+    "lnq"           # job 12539874 currently RUNNING on 3g.40gb — do NOT re-queue
+    "leanquant-nu"  # job 12539875 COMPLETED, PPL 128.81
+    "tesseraq"    # job 12547248 currently RUNNING on full h100 (MIG fix) — do NOT re-queue
     "pb-llm"        # job 12547249 FAILED (star-import clobbered BILLM_DOWNLOADS_DIR); fixed in
                     # PB-LLM/gptq_pb/datautils.py — ready to re-submit.
-    # "doml"          # job 12539878 COMPLETED, PPL 35.01
+    "doml"          # job 12539878 COMPLETED, PPL 35.01
     # "doml-binary"   # job 12539879 COMPLETED, PPL 42,639
     # "braq"          # job 12539880 COMPLETED, PPL 124k
 )
