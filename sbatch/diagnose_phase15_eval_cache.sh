@@ -89,8 +89,17 @@ check_blob "MMLU cache"            "$DATASETS_CACHE/cais___mmlu"
 check_blob "HellaSwag cache"       "$DATASETS_CACHE/Rowan___hellaswag"
 check_blob "ARC cache (combined)"  "$DATASETS_CACHE/allenai___ai2_arc"
 
-# WikiText-2 — already used pre-Phase-15
-check_blob "WikiText-2 cache"      "$DATASETS_CACHE/wikitext"
+# WikiText-2 — `download_cache.sh` calls load_dataset() WITHOUT cache_dir,
+# so wikitext lands under HF_DATASETS_CACHE (= $HF_HOME/datasets), not under
+# $BILLM_DOWNLOADS_DIR/datasets/. Check both; the loader probe in Section 2
+# is the authoritative answer regardless.
+if [[ -d "$HF_DATASETS_CACHE/wikitext" ]]; then
+    check_blob "WikiText-2 cache (HF_DATASETS_CACHE)" "$HF_DATASETS_CACHE/wikitext"
+elif [[ -d "$DATASETS_CACHE/wikitext" ]]; then
+    check_blob "WikiText-2 cache (DATASETS_CACHE)"    "$DATASETS_CACHE/wikitext"
+else
+    echo "  [MISS] WikiText-2 cache  (checked both \$HF_DATASETS_CACHE/wikitext and \$DATASETS_CACHE/wikitext)"
+fi
 
 echo
 
