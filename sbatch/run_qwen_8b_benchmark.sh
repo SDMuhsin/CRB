@@ -141,7 +141,7 @@ techniques=(
     "tesseraq"
     "pb-llm"
     "doml"
-    "doml-binary"
+    #"doml-binary"
     "braq"
 )
 
