@@ -137,34 +137,59 @@ unset DL_REAL
 echo "=== Downloading models (snapshot to BILLM_DOWNLOADS_DIR) ==="
 echo "    target: $BILLM_DOWNLOADS_DIR"
 
+# Optional HF token for gated repos (meta-llama/Llama-3.x-* requires auth).
+# Read from ./.hf_token (gitignored) if present; export so the python block
+# below can pick it up via huggingface_hub's standard env-var lookup.
+if [[ -f ./.hf_token ]]; then
+    export HF_TOKEN="$(tr -d '[:space:]' < ./.hf_token)"
+    echo "    HF token loaded from ./.hf_token (length ${#HF_TOKEN})."
+else
+    echo "    NOTE: no ./.hf_token found — gated repos (e.g. meta-llama/*) will fail."
+fi
+
 python -c "
 import os
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer, AutoConfig
 
 cache_dir = os.environ['BILLM_DOWNLOADS_DIR']
-# All four Qwen3 sizes covered by the Nibi benchmark suite. Adding any of
-# them requires a companion re-run of this script to populate refs/main.
+# huggingface_hub picks up HF_TOKEN automatically; pass explicitly anyway so
+# AutoConfig/AutoTokenizer also authenticate against gated repos like
+# meta-llama/Llama-3.x-*.
+hf_token = os.environ.get('HF_TOKEN') or None
+
+# All Qwen3 + Llama-3 sizes covered by the Nibi benchmark suites. Adding a
+# new model here requires a companion re-run of this script to populate
+# refs/main + transformers cache.
 models = [
     'Qwen/Qwen3-0.6B',
     'Qwen/Qwen3-1.7B',
     'Qwen/Qwen3-4B',
     'Qwen/Qwen3-8B',
+    # Llama-3 family. Llama-3.2-{1B,3B} use Llama-3.2 community gate; the
+    # supplied .hf_token grants access. Llama-3.1-8B is gated separately and
+    # the .hf_token was confirmed 403 Forbidden against it (2026-04-27);
+    # NousResearch/Meta-Llama-3.1-8B is an ungated identical-weight mirror
+    # (Phase-14B precedent — same pattern used for Llama-2-7b-hf).
+    'meta-llama/Llama-3.2-1B',
+    'meta-llama/Llama-3.2-3B',
+    'NousResearch/Meta-Llama-3.1-8B',
 ]
 
 for model_name in models:
     print(f'Downloading {model_name} -> {cache_dir} ...')
-    path = snapshot_download(repo_id=model_name, cache_dir=cache_dir)
+    path = snapshot_download(repo_id=model_name, cache_dir=cache_dir, token=hf_token)
     print(f'  Snapshot: {path}')
     # Touch the tokenizer + config so the transformers cache index is warmed
     # under the SAME cache_dir the runners will read from offline.
-    AutoConfig.from_pretrained(model_name, cache_dir=cache_dir)
-    AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
+    AutoConfig.from_pretrained(model_name, cache_dir=cache_dir, token=hf_token)
+    AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir, token=hf_token)
     print(f'  Tokenizer + config ready.')
     # CRITICAL: a subsequent snapshot_download(local_files_only=True) is the
     # only reliable way to guarantee refs/main has been written. Without this
     # hf_hub_download(revision='main', local_files_only=True) can later fail
     # with LocalEntryNotFoundError even though every file is on disk.
+    # local_files_only=True does NOT need the token (no network call).
     resolved = snapshot_download(repo_id=model_name, cache_dir=cache_dir, local_files_only=True)
     print(f'  refs/main verified offline -> {resolved}')
 
@@ -178,6 +203,16 @@ except Exception as exc:
     raise SystemExit(
         f'FATAL: Qwen3ForCausalLM not importable ({exc!r}). '
         'Install transformers>=4.51 from PyPI (see requirements.txt header).'
+    )
+# LlamaForCausalLM has been in transformers for ages but verify import too —
+# catches venv breakage before any sbatch job goes out.
+try:
+    from transformers import LlamaForCausalLM  # noqa: F401
+    print(f'LlamaForCausalLM import OK.')
+except Exception as exc:
+    raise SystemExit(
+        f'FATAL: LlamaForCausalLM not importable ({exc!r}). '
+        'Check transformers install (see fix_venv_torchvision.sh for ABI fixes).'
     )
 "
 

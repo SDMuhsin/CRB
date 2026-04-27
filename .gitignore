@@ -28,3 +28,7 @@ logs
 results
 .claude
 CLAUDE.md
+
+# Secrets
+.hf_token
+

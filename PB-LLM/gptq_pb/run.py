@@ -30,7 +30,9 @@ def get_model(model_name):
             from transformers import OPTForCausalLM
             model = OPTForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
             model.seqlen = model.config.max_position_embeddings
-        elif "llama" in model_name:
+        elif "llama" in model_name.lower():
+            # Case-insensitive: matches huggyllama/llama-7b, meta-llama/Llama-3.2-1B,
+            # NousResearch/Llama-2-7b-hf, etc.
             from transformers import LlamaForCausalLM
             model = LlamaForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
             model.seqlen = 2048
@@ -76,10 +78,16 @@ def quant_sequential(model, dataloader, dev):
             and model.model.decoder.project_in
         ):
             model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
-    elif "huggyllama" in args.model:
+    elif "llama" in args.model.lower():
+        # Widened from "huggyllama" check (only matched huggyllama/llama-7b);
+        # now matches meta-llama/Llama-3.2-1B, NousResearch/Llama-2-7b-hf, etc.
+        # All LLaMA-family decoders share the same model.layers / embed_tokens
+        # / norm structure — same handling applies.
         layers = model.model.layers
         model.model.embed_tokens = model.model.embed_tokens.to(dev)
         model.model.norm = model.model.norm.to(dev)
+        if hasattr(model.model, "rotary_emb"):
+            model.model.rotary_emb = model.model.rotary_emb.to(dev)
     elif "bloom" in args.model.lower():
         layers = model.transformer.h
         model.transformer.word_embeddings = model.transformer.word_embeddings.to(dev)
@@ -139,9 +147,12 @@ def quant_sequential(model, dataloader, dev):
             and model.model.decoder.project_in
         ):
             model.model.decoder.project_in = model.model.decoder.project_in.cpu()
-    elif "huggyllama" in args.model:
+    elif "llama" in args.model.lower():
+        # See matching `to(dev)` block above.
         model.model.embed_tokens = model.model.embed_tokens.cpu()
         model.model.norm = model.model.norm.cpu()
+        if hasattr(model.model, "rotary_emb"):
+            model.model.rotary_emb = model.model.rotary_emb.cpu()
     elif "bloom" in args.model.lower():
         model.transformer.word_embeddings = model.transformer.word_embeddings.cpu()
         model.transformer.word_embeddings_layernorm = model.transformer.word_embeddings_layernorm.cpu()
