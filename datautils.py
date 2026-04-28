@@ -21,7 +21,18 @@ def get_tokenizer(model_name):
     # Do NOT pickle the tokenizer — pickled tokenizers are bound to the
     # exact transformers version that wrote them and break cryptically
     # after any upgrade (e.g. wheelhouse transformers 4.42 -> PyPI 4.51).
-    if "llama" in model_name.lower() or "danube" in model_name.lower():
+    name_lower = model_name.lower()
+    is_llama3 = "llama-3" in name_lower or "llama3" in name_lower
+    if is_llama3:
+        # Llama-3+ uses a 128k BPE tokenizer. The slow `LlamaTokenizer` class
+        # appends `<unk>` to `added_tokens_encoder` at id 128256, which is
+        # OUT OF RANGE of the model's `embed_tokens` (shape (128256, hidden)).
+        # PTB Mikolov literally contains the substring `<unk>`, so a slow-tokenizer
+        # PTB encode emits id 128256 → CUDA `indexSelectLargeIndex` assertion
+        # in `embed_tokens`. Use AutoTokenizer (fast BPE) which has no such
+        # appended token. Also do NOT clobber bos/eos to 1/2 — Llama-3 BOS=128000.
+        tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=downloads_dir)
+    elif "llama" in name_lower or "danube" in name_lower:
         tokenizer = LlamaTokenizer.from_pretrained(
             model_name, use_fast=False, cache_dir=downloads_dir,
         )
@@ -31,7 +42,7 @@ def get_tokenizer(model_name):
                 tokenizer.eos_token_id = 2
             except AttributeError:
                 pass
-    elif any(k in model_name.lower() for k in ("smollm", "pythia", "qwen", "bloom", "granite")):
+    elif any(k in name_lower for k in ("smollm", "pythia", "qwen", "bloom", "granite")):
         tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=downloads_dir)
     else:
         tokenizer = AutoTokenizer.from_pretrained(
