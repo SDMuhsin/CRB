@@ -346,6 +346,45 @@ echo "=== Skipping pre-tokenization on login node (would OOM-kill). ==="
 echo "    The first sbatch job will tokenize and write the cache;"
 echo "    subsequent jobs block on the .lock then load it."
 echo ""
+
+# ============================================================================
+# Phase 18b: invalidate stale Llama-3 PTB calibration caches.
+# ============================================================================
+#
+# Pre-Phase-18b runs used the slow LlamaTokenizer for Llama-3 names, which
+# appends `<unk>` to added_tokens_encoder at id 128256 — out of range of
+# Llama-3's 128256-row embed_tokens (valid IDs 0..128255). PTB Mikolov text
+# contains 4794 literal `<unk>` substrings, so any DOWNLOAD_ptb_*.pt cache
+# built by those runs holds id 128256 and triggers
+# `Indexing.cu:1308: indexSelectLargeIndex` on every subsequent PTB eval —
+# even after the `is_llama3` fix in datautils.get_tokenizer, because that
+# fix only fires on cache MISS. Forcing a miss here lets the next sbatch
+# job rebuild with the correct fast BPE tokenizer.
+#
+# Scoped to Llama-3 names only — Llama-2 (BOS=1, no `<unk>` appended) and
+# Qwen3 (different tokenizer family) caches are unaffected. Wikitext2 and
+# C4 caches are safe regardless (no literal `<unk>` in those corpora).
+# See memory: feedback_get_loaders_cache_poisoning.md.
+# ============================================================================
+
+echo "=== Invalidating stale PTB calibration caches for Llama-3 models ==="
+removed_any=0
+for m in 'meta-llama/Llama-3.2-1B' \
+         'meta-llama/Llama-3.2-3B' \
+         'NousResearch/Meta-Llama-3.1-8B'; do
+    for f in "$BILLM_DOWNLOADS_DIR"/DOWNLOAD_ptb_*_${m}.pt \
+             "$BILLM_DOWNLOADS_DIR"/DOWNLOAD_ptb_*_${m}.pt.lock; do
+        [[ -e "$f" ]] || continue
+        echo "  removing $f"
+        rm -f "$f"
+        removed_any=1
+    done
+done
+if [[ $removed_any -eq 0 ]]; then
+    echo "  (no stale PTB calibration files found — clean)"
+fi
+echo ""
+
 echo "============================================"
 echo "All downloads complete."
 echo "Cache root:                       $CACHE_ROOT"
