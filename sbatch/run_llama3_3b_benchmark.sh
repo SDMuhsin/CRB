@@ -104,17 +104,21 @@ PBLLM_LOW_FRAC=0.9
 PBLLM_HIGH_BIT=8
 
 techniques=(
-    "fp16"
-    "rtn-2bit"
-    "gptq-2bit"
-    "sinq"
+    # 2026-04-29: only `lnq` re-submitted. Job 12923285 (the original `lnq`
+    # submission in the 3B batch 12923281–12923291) produced no log and no
+    # CSV row; everything else in that batch landed cleanly with full 7-task
+    # coverage. Re-enable the others when this gap is filled.
+    # "fp16"
+    # "rtn-2bit"
+    # "gptq-2bit"
+    # "sinq"
     "lnq"
-    "leanquant-nu"
-    "tesseraq"
-    "pb-llm"
-    "doml"
-    "doml-binary"
-    "braq"
+    # "leanquant-nu"
+    # "tesseraq"
+    # "pb-llm"
+    # "doml"
+    # "doml-binary"
+    # "braq"
 )
 
 # ============================================================================
