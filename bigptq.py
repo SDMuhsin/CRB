@@ -168,13 +168,20 @@ class BRAGPTQ:
                 Losses1 = torch.zeros_like(W1)
                 Hinv1 = Hinv[col_st:col_ed, col_st:col_ed]
 
-                # Dispatch between two quantization modes:
+                # Dispatch between three quantization modes:
                 #   (A) partition == 1 AND quantizer is a simple integer method
                 #       (2bit/3bit/4bit): paper-faithful GPTQ — column-by-column
                 #       quantize + intra-block error feedback. Scales are either
                 #       the pre-computed `global_scale` (paper Table 3 no-groupsize)
                 #       or per-row-per-block min/max (paper Table 7 gs=blocksize),
                 #       computed ONCE before the column sweep and held fixed.
+                #   (A') SDOML (partition == 1, method == 'sdoml'): Composition
+                #        Candidate I per llmdocs/sdoml/derivation.md §7.1 — fit
+                #        (m, C) jointly once on the pre-feedback W1 with
+                #        Hessian-derived col_weights, then column-by-column GPTQ
+                #        residual sweep where the mask is FROZEN (pruned cells
+                #        stay 0) and each kept column's q is the nearest centroid
+                #        in the row's codebook to (w - residual). C1-faithful.
                 #   (B) partition > 1 OR non-integer quantizer (DOML/BRAQ/CRB/…):
                 #       legacy pre-quantize-then-read path. DOML's structural
                 #       partition is defined on the original block; per-row
@@ -182,11 +189,260 @@ class BRAGPTQ:
                 #       keep the original behaviour here. Accepted as a
                 #       DOML-family design choice; see llmdocs/trackers/
                 #       baseline_faithfulness_audit.md Phase 14B.
-                is_int_quant = getattr(self.braq_quantizer, 'method', None) in (
-                    '2bit', '3bit', '4bit'
-                )
+                method_name = getattr(self.braq_quantizer, 'method', None)
+                is_int_quant = method_name in ('2bit', '3bit', '4bit')
+                is_sdoml = (method_name == 'sdoml')
+                is_magfit = (method_name == 'magfit')
+                is_sdoml_partition = (method_name == 'sdoml_partition')
 
-                if partition == 1 and is_int_quant:
+                if partition == 3 and is_sdoml_partition:
+                    # ---- (A''') SDOML + DOML structural partition (S8).
+                    # Per-row layout: 3 column partitions via
+                    # `structural_guassian_distribution` (already computed above
+                    # as mask1/mask2/mask3 stored in `mask[0..2]`). Within EACH
+                    # partition, joint SDOML alternation with its own (m_g, C_g).
+                    # Mask is FROZEN for the column sweep below.
+                    from binary import sdoml_partition_quantize  # avoid cycle
+
+                    sparsity = float(getattr(self.braq_quantizer,
+                                              'sparsity', 0.5))
+                    K_sd = int(getattr(self.braq_quantizer, 'sdoml_K', 4))
+                    n_iter_sd = int(getattr(self.braq_quantizer,
+                                             'sdoml_n_iter', 20))
+                    # S9: optional per-partition sparsity vector. When None,
+                    # sdoml_partition_quantize defaults to [sparsity] * G
+                    # (S8 symmetric path). When set (e.g. [s, 0, 0]),
+                    # mid + salient partitions run dense Lloyd-Max instead
+                    # of joint SDOML — preserves DOML's structural protection.
+                    per_part_s = getattr(self.braq_quantizer,
+                                          'per_partition_sparsity', None)
+
+                    hinv_diag = torch.diag(Hinv1)
+                    col_weights_sd = 1.0 / (hinv_diag ** 2 + 1e-12)
+
+                    # mask is [3, oc, n_cols] from above; pass as partition_masks.
+                    W1_q, W1_mask, _W1_codebooks, _phi_traces = \
+                        sdoml_partition_quantize(
+                            W1, col_weights_sd,
+                            partition_masks=mask,
+                            sparsity=sparsity, K=K_sd,
+                            n_iter=n_iter_sd, init="quantile",
+                            return_aux=True,
+                            per_partition_sparsity=per_part_s,
+                        )
+
+                    # Per-partition codebooks for the column sweep. We need to
+                    # know, for each (row, column) in the block, which group it
+                    # belongs to and what that group's codebook is for that row.
+                    # Strategy:
+                    #   - Build per-row "centroid table" of shape [oc, K] for
+                    #     each of the 3 partitions, by re-running
+                    #     sdoml_quantize per group + per row-signature. We just
+                    #     captured this in _W1_codebooks.
+                    #   - For each (r, i) we look up the group g = mask[g, r, i]
+                    #     and use codebooks[g] for row r to snap.
+                    #
+                    # Rather than re-thread the per-row codebooks (complex when
+                    # rows in a group share signatures), we approach the column
+                    # sweep more simply: we treat the SDOML+partition block fit
+                    # `W1_q` as the "snapped" output, AND also capture a
+                    # per-(r, i) snap function via per-row, per-partition
+                    # nearest-centroid lookup at sweep time.
+                    #
+                    # To do nearest-centroid lookup at sweep time we need the
+                    # per-row, per-partition codebook indexed by (g, r). We
+                    # build a [G, oc, K] codebook tensor with NaN padding for
+                    # rows that have empty group.
+                    G = mask.shape[0]
+                    oc = W1.shape[0]
+                    codebook_table = torch.full(
+                        (G, oc, K_sd), float("nan"),
+                        dtype=W1.dtype, device=W1.device,
+                    )
+                    for g_idx, group_aux in enumerate(_W1_codebooks):
+                        if group_aux is None:
+                            continue
+                        # group_aux is a list of either:
+                        #   (sub_idx_tensor, cb_sub_tensor)  — same-count branch
+                        #   (ridx_int, col_idx_row, cb_row)  — per-row branch
+                        for entry in group_aux:
+                            if len(entry) == 2:
+                                sub_idx, cb_sub = entry
+                                codebook_table[g_idx, sub_idx, :] = \
+                                    cb_sub.to(W1.dtype).to(W1.device)
+                            elif len(entry) == 3:
+                                ridx, _col_idx_row, cb_row = entry
+                                codebook_table[g_idx, ridx, :] = \
+                                    cb_row[0].to(W1.dtype).to(W1.device)
+
+                    for i in range(n_cols):
+                        w = W1[:, i]                                # (oc,)
+                        d = Hinv1[i, i]
+                        # Determine partition g for each row at column i.
+                        # mask[g, oc, i] is True for the group this row belongs to.
+                        # Build per-row group index.
+                        group_id = torch.zeros(oc, dtype=torch.long,
+                                                device=W1.device)
+                        for g_idx in range(G):
+                            group_id = torch.where(mask[g_idx, :, i],
+                                                   torch.tensor(g_idx,
+                                                                 device=W1.device,
+                                                                 dtype=torch.long),
+                                                   group_id)
+                        # Per-row keep mask for this column (across all groups).
+                        # The assembled mask `W1_mask` already encodes this.
+                        m_col = W1_mask[:, i]                       # (oc,) bool
+
+                        # Nearest-centroid lookup per row using its group's codebook.
+                        # codebook_table[group_id, row_idx, :] -> [oc, K]
+                        row_idx_arange = torch.arange(oc, device=W1.device)
+                        cb_per_row = codebook_table[group_id, row_idx_arange]  # [oc, K]
+                        # Some rows may have NaN (empty group). For those, we
+                        # fall back to q=0 (mask leak — but those rows should
+                        # also have m_col=False in that group, so q=0 is correct).
+                        diffs = (w.unsqueeze(1) - cb_per_row) ** 2  # [oc, K]
+                        # Replace NaN with +inf so argmin doesn't pick them.
+                        diffs = torch.where(torch.isnan(diffs),
+                                             torch.full_like(diffs,
+                                                             float("inf")),
+                                             diffs)
+                        a_idx = diffs.argmin(dim=1)                 # [oc]
+                        q_kept = cb_per_row.gather(
+                            1, a_idx.unsqueeze(1)
+                        ).squeeze(1)
+                        # If q_kept is NaN (empty-group row), force 0.
+                        q_kept = torch.where(torch.isnan(q_kept),
+                                              torch.zeros_like(q_kept),
+                                              q_kept)
+                        q = torch.where(m_col, q_kept,
+                                        torch.zeros_like(q_kept))
+
+                        Q1[:, i] = q
+                        Losses1[:, i] = (w - q) ** 2 / (d * d)
+                        err1 = (w - q) / d
+                        Err1[:, i] = err1
+
+                        # Intra-block GPTQ feedback (mask is FROZEN).
+                        if i + 1 < n_cols:
+                            W1[:, i + 1:] -= err1.unsqueeze(1) * Hinv1[i, i + 1:].unsqueeze(0)
+
+                    W[:, col_st:col_ed] = Q1
+                    Losses += torch.sum(Losses1, 1) / 2
+                    # Inter-block GPTQ feedback (mask is per-block).
+                    W[:, col_ed:] -= Err1.matmul(Hinv[col_st:col_ed, col_ed:])
+
+                elif partition == 1 and is_sdoml:
+                    # ---- (A') SDOML — Composition Candidate I (derivation §7.1)
+                    from binary import sdoml_quantize  # local import: avoid cycle
+
+                    sparsity = float(getattr(self.braq_quantizer,
+                                              'sparsity', 0.5))
+                    K_sd = int(getattr(self.braq_quantizer, 'sdoml_K', 4))
+                    n_iter_sd = int(getattr(self.braq_quantizer,
+                                             'sdoml_n_iter', 20))
+
+                    # Hessian-derived per-column importance — derivation §1.2.
+                    # MUST come from Hinv (post-Cholesky) per C3, matching the
+                    # legacy DOML pattern at the bottom of this method.
+                    hinv_diag = torch.diag(Hinv1)
+                    col_weights_sd = 1.0 / (hinv_diag ** 2 + 1e-12)
+
+                    # Joint per-row alternation on the pre-feedback block.
+                    W1_q, W1_mask, _W1_codebook, _phi_trace = sdoml_quantize(
+                        W1, col_weights_sd, sparsity=sparsity, K=K_sd,
+                        n_iter=n_iter_sd, init="quantile", return_aux=True,
+                    )
+                    # Mask is FROZEN for the column sweep below — drift guard.
+                    # W1_mask: [oc, n_cols] bool; W1_q: [oc, n_cols] same dtype.
+
+                    # Pre-compute per-row sorted codebooks for nearest-centroid
+                    # snap during the column sweep. Each row has K levels;
+                    # nearest-centroid lookup over K=4 is just an arg-min.
+                    # We re-use the codebook returned by sdoml_quantize.
+                    codebook = _W1_codebook.to(W1.dtype).to(W1.device)  # [oc, K]
+
+                    for i in range(n_cols):
+                        w = W1[:, i]                                # (oc,)
+                        d = Hinv1[i, i]
+                        m_col = W1_mask[:, i]                       # (oc,) bool
+
+                        # For kept positions: snap to nearest centroid in this
+                        # row's codebook (codebook is fixed per derivation §7.1).
+                        # For pruned positions: q = 0 (mask leak guard).
+                        diffs = (w.unsqueeze(1) - codebook) ** 2     # [oc, K]
+                        a_idx = diffs.argmin(dim=1)                  # [oc]
+                        q_kept = codebook.gather(1, a_idx.unsqueeze(1)).squeeze(1)
+                        q = torch.where(m_col, q_kept,
+                                        torch.zeros_like(q_kept))
+
+                        Q1[:, i] = q
+                        Losses1[:, i] = (w - q) ** 2 / (d * d)
+                        err1 = (w - q) / d
+                        Err1[:, i] = err1
+
+                        # Intra-block GPTQ feedback: shift remaining columns by
+                        # the propagated error. Note: this perturbs W1[:, i+1:]
+                        # but the mask for those columns was FROZEN at the start
+                        # of this block — we will not flip it. Pruned columns
+                        # in the residual still get q = 0 above.
+                        if i + 1 < n_cols:
+                            W1[:, i + 1:] -= err1.unsqueeze(1) * Hinv1[i, i + 1:].unsqueeze(0)
+
+                    W[:, col_st:col_ed] = Q1
+                    Losses += torch.sum(Losses1, 1) / 2
+                    # Inter-block GPTQ feedback (mask is per-block, so future
+                    # blocks get a fresh joint fit).
+                    W[:, col_ed:] -= Err1.matmul(Hinv[col_st:col_ed, col_ed:])
+
+                elif partition == 1 and is_magfit:
+                    # ---- (A'') magfit (S6 ablation) — magnitude-prune-then-LMQ.
+                    # Same composition as SDOML branch above (mask FROZEN, GPTQ
+                    # column sweep with codebook-snap), but the (mask, codebook)
+                    # pair comes from `magfit_quantize` instead of
+                    # `sdoml_quantize` — so the only procedural difference is
+                    # the absence of joint mask + codebook alternation. This
+                    # isolates the joint-vs-decoupled axis cleanly per S6.
+                    from binary import magfit_quantize  # local import: avoid cycle
+
+                    sparsity = float(getattr(self.braq_quantizer,
+                                              'sparsity', 0.5))
+                    K_sd = int(getattr(self.braq_quantizer, 'sdoml_K', 4))
+                    n_iter_sd = int(getattr(self.braq_quantizer,
+                                             'sdoml_n_iter', 20))
+
+                    hinv_diag = torch.diag(Hinv1)
+                    col_weights_sd = 1.0 / (hinv_diag ** 2 + 1e-12)
+
+                    W1_q, W1_mask, _W1_codebook, _phi_trace = magfit_quantize(
+                        W1, col_weights_sd, sparsity=sparsity, K=K_sd,
+                        n_iter=n_iter_sd, return_aux=True,
+                    )
+                    codebook = _W1_codebook.to(W1.dtype).to(W1.device)
+
+                    for i in range(n_cols):
+                        w = W1[:, i]
+                        d = Hinv1[i, i]
+                        m_col = W1_mask[:, i]
+
+                        diffs = (w.unsqueeze(1) - codebook) ** 2
+                        a_idx = diffs.argmin(dim=1)
+                        q_kept = codebook.gather(1, a_idx.unsqueeze(1)).squeeze(1)
+                        q = torch.where(m_col, q_kept,
+                                        torch.zeros_like(q_kept))
+
+                        Q1[:, i] = q
+                        Losses1[:, i] = (w - q) ** 2 / (d * d)
+                        err1 = (w - q) / d
+                        Err1[:, i] = err1
+
+                        if i + 1 < n_cols:
+                            W1[:, i + 1:] -= err1.unsqueeze(1) * Hinv1[i, i + 1:].unsqueeze(0)
+
+                    W[:, col_st:col_ed] = Q1
+                    Losses += torch.sum(Losses1, 1) / 2
+                    W[:, col_ed:] -= Err1.matmul(Hinv[col_st:col_ed, col_ed:])
+
+                elif partition == 1 and is_int_quant:
                     # Paper-faithful GPTQ column sweep.
                     bits = int(self.braq_quantizer.method[0])
                     dev = W1.device

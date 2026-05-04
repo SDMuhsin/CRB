@@ -133,6 +133,11 @@ techniques=(
     "doml"
     "doml-binary"
     "braq"
+    # SDOML (S10 integration, all commented out by default — enable per-job).
+    #"sdoml-s50"            # base SDOML, joint mask + Lloyd-Max K=4 single codebook
+    #"sdoml-s20"            # base SDOML at sparsity 0.2
+    #"sdoml_part_asym-s50"  # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
+    #"sdoml_part_asym-s20"  # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
 )
 
 # ============================================================================
@@ -185,6 +190,16 @@ get_job_resources() {
             cpus=6
             mem="48G"
             ;;
+        sdoml-s50|sdoml-s20|sdoml_part_asym-s50|sdoml_part_asym-s20)
+            # SDOML (S10 integration, 2026-05-03): cheaper per-token than
+            # DOML (partition=1 skips DOML's structural partition compute);
+            # asymmetric SDOML+partition at most ~2× DOML wall on layer-0
+            # (S9 measurement). Use the DOML-default budget verbatim as a
+            # safe upper bound (DOML lives in the catch-all default below).
+            gpu_resource="$GPU_LARGE"
+            cpus=8
+            mem="64G"
+            ;;
         *)
             # rtn-2bit, gptq-2bit, sinq, doml, doml-binary, braq.
             # Peak 22-25 GB ⇒ 3g.40gb fits with headroom.
@@ -211,6 +226,10 @@ get_time_limit() {
         tesseraq)     echo "96:00:00" ;;  # b5 — 92 h quant + ~4 h evals
         lnq)          echo "20:00:00" ;;  # b3 — 16 h Fisher/saliency/refine + 4 h margin
         leanquant-nu) echo "11:00:00" ;;  # b2 — ~1 h quant + ~6 h evals + margin
+        sdoml-s50)             echo "16:00:00" ;;  # b3 — same envelope as DOML (S10 mirror)
+        sdoml-s20)             echo "16:00:00" ;;  # b3
+        sdoml_part_asym-s50)   echo "16:00:00" ;;  # b3 — asym ~2× DOML layer-0 (S9), DOML budget covers
+        sdoml_part_asym-s20)   echo "16:00:00" ;;  # b3
         *)            echo "11:00:00" ;;
     esac
 }
@@ -256,6 +275,25 @@ build_python_cmd() {
         pb-llm)
             echo "python3 -u PB-LLM/gptq_pb/run.py $MODEL $DATASET $PBLLM_METHOD --low_frac $PBLLM_LOW_FRAC --high_bit $PBLLM_HIGH_BIT --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED $common_evals"
             ;;
+        sdoml-s50)
+            # S10 integration: base SDOML (joint mask + K=4 Lloyd-Max single
+            # codebook), partition=1, sparsity=0.5. CSV tag resolved to
+            # `sdoml-s50` by run.py:_resolve_csv_method.
+            echo "python3 -u run.py $MODEL $DATASET sdoml --sparsity 0.5 --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
+            ;;
+        sdoml-s20)
+            # S10 integration: base SDOML at sparsity 0.2 (less aggressive prune).
+            echo "python3 -u run.py $MODEL $DATASET sdoml --sparsity 0.2 --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
+            ;;
+        sdoml_part_asym-s50)
+            # S10 integration: asymmetric SDOML+partition (S9 mandate).
+            # s_bulk=0.5 applied to bulk partition; mid + salient dense.
+            echo "python3 -u run.py $MODEL $DATASET sdoml_partition --sparsity 0.5 --sdoml_asymmetric --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
+            ;;
+        sdoml_part_asym-s20)
+            # S10 integration: asymmetric SDOML+partition, s_bulk=0.2 (S9 best Phi).
+            echo "python3 -u run.py $MODEL $DATASET sdoml_partition --sparsity 0.2 --sdoml_asymmetric --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
+            ;;
         *)
             echo "echo 'Unknown technique: $technique'; exit 1"
             ;;
@@ -275,6 +313,10 @@ get_technique_desc() {
         doml)         echo "DOML (K=4, Lloyd-Max + GPTQ + structural partition, salient=$SALIENT_METRIC)" ;;
         doml-binary)  echo "DOML-binary (K=2, Lloyd-Max + GPTQ + structural partition)"     ;;
         braq)         echo "BRAQ 1-bit baseline (blocksize=$BLOCKSIZE)"                     ;;
+        sdoml-s50)            echo "SDOML (joint mask + Lloyd-Max K=4, sparsity=0.5, ~2.06 bpw)" ;;
+        sdoml-s20)            echo "SDOML (joint mask + Lloyd-Max K=4, sparsity=0.2, ~2.62 bpw)" ;;
+        sdoml_part_asym-s50)  echo "SDOML+partition asymmetric (s_bulk=0.5, mid+salient dense, S9 ext.)" ;;
+        sdoml_part_asym-s20)  echo "SDOML+partition asymmetric (s_bulk=0.2, S9 best Phi)"      ;;
     esac
 }
 

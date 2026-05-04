@@ -1,3 +1,4 @@
+import math
 import time
 import sys
 
@@ -331,6 +332,34 @@ def quant_sequential(model, dataloader, dev):
                     lam = args.lam,
                     coupling = args.coupling
                 )
+                # SDOML: forward sparsity + n_iter onto the quantizer so
+                # bigptq.fasterquant can read them via getattr. Per derivation
+                # §1.3 and S4 contract. n_iter=1 selects the 1-pass ablation
+                # (no joint alternation; codebook-only contribution).
+                if args.low_quant_method == 'sdoml':
+                    braq_quantizer.sparsity = float(args.sparsity)
+                    braq_quantizer.sdoml_n_iter = int(args.sdoml_n_iter)
+                # magfit (S6 ablation): magnitude-prune-then-LMQ, no joint
+                # alternation. Sparsity is read by the magfit branch in
+                # bigptq.fasterquant. Cleanly separate from sdoml — uses a
+                # different binary.py kernel (magfit_quantize) per S6 contract.
+                if args.low_quant_method == 'magfit':
+                    braq_quantizer.sparsity = float(args.sparsity)
+                # sdoml_partition (S8): SDOML applied independently within each
+                # of 3 DOML structural column partitions. Same per-row sparsity
+                # as base SDOML; routes through the partition==3 + is_sdoml_partition
+                # branch in bigptq.fasterquant.
+                if args.low_quant_method == 'sdoml_partition':
+                    braq_quantizer.sparsity = float(args.sparsity)
+                    braq_quantizer.sdoml_n_iter = int(args.sdoml_n_iter)
+                    # S9 (2026-05-03): when --sdoml_asymmetric, set per-
+                    # partition sparsity vector [s, 0, 0]: bulk sparse,
+                    # mid + salient dense. Routes through sdoml_partition_
+                    # quantize's dense-path branch for mid + salient.
+                    if getattr(args, 'sdoml_asymmetric', False):
+                        braq_quantizer.per_partition_sparsity = [
+                            float(args.sparsity), 0.0, 0.0,
+                        ]
                 gptq[name] = BRAGPTQ(
                     subset[name],
                     braq_quantizer,
@@ -363,6 +392,40 @@ def quant_sequential(model, dataloader, dev):
                         blocksize=args.blocksize,
                         partition=3,
                         orders=(1,1,1),  # order ignored by DOML quantizer
+                    )
+                elif args.low_quant_method == 'sdoml':
+                    # SDOML: single per-row codebook (no structural partition).
+                    # Routes through the partition==1 + is_sdoml branch in
+                    # bigptq.fasterquant (Composition Candidate I, derivation §7.1).
+                    info = gptq[name].fasterquant(
+                        percdamp=args.percdamp,
+                        blocksize=args.blocksize,
+                        partition=1,
+                        orders=(1,),  # single-partition order, unused by SDOML
+                    )
+                elif args.low_quant_method == 'magfit':
+                    # magfit (S6 ablation): magnitude-prune-then-LMQ.
+                    # Routes through the partition==1 + is_magfit branch in
+                    # bigptq.fasterquant. Uses Hessian-derived col_weights for
+                    # the LMQ centroid step; the prune step uses |x|*sqrt(w_i)
+                    # (matches BiLLM-style salience). Same GPTQ residual sweep
+                    # as SDOML so the comparison is apples-to-apples.
+                    info = gptq[name].fasterquant(
+                        percdamp=args.percdamp,
+                        blocksize=args.blocksize,
+                        partition=1,
+                        orders=(1,),  # single-partition order, unused
+                    )
+                elif args.low_quant_method == 'sdoml_partition':
+                    # SDOML+partition (S8): DOML's 3-way structural partition,
+                    # joint per-row SDOML inside each partition. Routes through
+                    # the partition==3 + is_sdoml_partition branch in
+                    # bigptq.fasterquant.
+                    info = gptq[name].fasterquant(
+                        percdamp=args.percdamp,
+                        blocksize=args.blocksize,
+                        partition=3,
+                        orders=(1, 1, 2),  # match DOML's structural defaults
                     )
                 else:
                     info = gptq[name].fasterquant(
@@ -775,7 +838,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "low_quant_method",
         type=str,
-        choices=['fp16','rtn',"xnor", "sign", "no", "2bit", "3bit", "4bit", "prune", "braq",'robq','mestrobq','medianbraq','orb','whor','arb','bhor','jrb','crb','crb_norefine','crb_symdamp','crb_symdamp_norefine','crb_resrhs','crb_resrhs_norefine','crb_seqalpha','crb_seqalpha_norefine','crb_adaptive','crb_hessian','crb_native','odr','new','ahor','crbv8','crbv9','crbv10','crbog','secq','sbh','ternary','mixed','doml','doml_binary'],
+        choices=['fp16','rtn',"xnor", "sign", "no", "2bit", "3bit", "4bit", "prune", "braq",'robq','mestrobq','medianbraq','orb','whor','arb','bhor','jrb','crb','crb_norefine','crb_symdamp','crb_symdamp_norefine','crb_resrhs','crb_resrhs_norefine','crb_seqalpha','crb_seqalpha_norefine','crb_adaptive','crb_hessian','crb_native','odr','new','ahor','crbv8','crbv9','crbv10','crbog','secq','sbh','ternary','mixed','doml','doml_binary','sdoml','magfit','sdoml_partition'],
         help="quantization method; `xnor` is the method using XNOR to adapt hardware calculation; `prune` is the method used in sparseGPTQ; braq is the method used in BiLLM",
     )
     parser.add_argument("--load_quantized", action="store_true")
@@ -829,6 +892,36 @@ if __name__ == "__main__":
              "on the full weight matrix (paper Table 3 GPTQ no-groupsize). Without "
              "this, per-row scale is recomputed per GPTQ block (paper Table 7 "
              "gs=blocksize).",
+    )
+    parser.add_argument(
+        "--sparsity",
+        type=float,
+        default=0.5,
+        help="For --low_quant_method sdoml/magfit only: per-row keep fraction "
+             "1-sparsity. Default 0.5 (50%% pruned). Used to derive the "
+             "n_keep parameter inside sdoml_quantize per derivation §1.3.",
+    )
+    parser.add_argument(
+        "--sdoml_n_iter",
+        type=int,
+        default=20,
+        help="For --low_quant_method sdoml only: number of joint-alternation "
+             "rounds in sdoml_quantize. Default 20 (matches DOML's Lloyd-Max "
+             "iter count). Set to 1 for the SDOML-1pass ablation (no "
+             "alternation; tests whether the per-row codebook alone is the "
+             "win, vs the joint mask + codebook alternation).",
+    )
+    parser.add_argument(
+        "--sdoml_asymmetric",
+        action="store_true",
+        help="For --low_quant_method sdoml_partition only (S9 mandate "
+             "2026-05-03): apply SDOML's joint mask + Lloyd-Max ONLY to "
+             "the bulk partition (mask1, ~69%% of columns). Mid (mask2) "
+             "and salient (mask3) partitions stay fully dense (no pruning, "
+             "K=4 Lloyd-Max as in DOML). Sparsity rate `--sparsity` then "
+             "refers to the BULK keep fraction, not the global keep "
+             "fraction. Addresses S8's HONEST-NEGATIVE finding that uniform "
+             "pruning across partitions destroys mask3's salient columns.",
     )
     parser.add_argument(
         "--device",
@@ -963,6 +1056,33 @@ if __name__ == "__main__":
                 return f"rtn-{base}"
             if getattr(_args, "partition", 3) == 1 and getattr(_args, "global_scale", False):
                 return f"gptq-{base}"
+        if base == "sdoml":
+            # Self-describing tag: e.g. sdoml-s50 for sparsity=0.5.
+            # If sdoml_n_iter == 1 (S6 ablation) append '-1pass' so the row
+            # is unambiguous in the comparison pivot.
+            s_pct = int(round(float(getattr(_args, "sparsity", 0.5)) * 100))
+            n_iter = int(getattr(_args, "sdoml_n_iter", 20))
+            tag = f"sdoml-s{s_pct}"
+            if n_iter == 1:
+                tag = f"{tag}-1pass"
+            return tag
+        if base == "magfit":
+            # S6 ablation tag: e.g. magfit-s50 for sparsity=0.5.
+            s_pct = int(round(float(getattr(_args, "sparsity", 0.5)) * 100))
+            return f"magfit-s{s_pct}"
+        if base == "sdoml_partition":
+            # S8 tag: SDOML+partition with sparsity, e.g. sdoml_partition-s50.
+            # S9 (2026-05-03): when --sdoml_asymmetric, append "_asym" so
+            # rows are unambiguous in the comparison pivot.
+            s_pct = int(round(float(getattr(_args, "sparsity", 0.5)) * 100))
+            n_iter = int(getattr(_args, "sdoml_n_iter", 20))
+            asym = getattr(_args, "sdoml_asymmetric", False)
+            tag = f"sdoml_partition-s{s_pct}"
+            if asym:
+                tag = f"{tag}_asym"
+            if n_iter == 1:
+                tag = f"{tag}-1pass"
+            return tag
         return base
 
     csv_method = _resolve_csv_method(args)
@@ -975,7 +1095,62 @@ if __name__ == "__main__":
         'rtn-2bit': 2.0, 'rtn-3bit': 3.0, 'rtn-4bit': 4.0,
         'gptq-2bit': 2.0, 'gptq-3bit': 3.0, 'gptq-4bit': 4.0,
     }
-    _run_bpw = _bpw_map.get(csv_method, '')
+    if csv_method.startswith("sdoml-s") or csv_method.startswith("magfit-s"):
+        # Effective bpw under bitmap encoding (C4): K*16/N + 1 + (1-s)*log2(K).
+        # We use a representative N (model.config.hidden_size if available
+        # later, but at this point the model is not loaded; use a typical
+        # Qwen3-0.6B-style hidden = 1024 — bpw is dominated by the 1 + (1-s)*log2K
+        # term and the K*16/N codebook tail is ~0.06 bpw at K=4 N=1024).
+        # Per derivation §6.1 the dominant components are the 1-bit bitmap
+        # + (1-s)*log2(K) codebook indices. magfit (S6 ablation) has the
+        # SAME bitmap+codebook layout as SDOML so the bpw formula matches —
+        # only the (mask, codebook) joint optimisation differs.
+        s_val = float(getattr(args, "sparsity", 0.5))
+        K_val = 4
+        N_rep = 1024
+        _run_bpw = (K_val * 16.0) / N_rep + 1.0 + (1.0 - s_val) * math.log2(K_val)
+    elif csv_method.startswith("sdoml_partition-s"):
+        # SDOML+partition (S8 contract C4): G=3 codebooks per row, each of
+        # K levels. Bitmap is per-row (still 1 bit per weight). Codebook
+        # indices: (1-s)*log2(K) per kept weight. So:
+        #   bpw = G*K*16/N + 1 + (1-s)*log2(K)
+        # For G=3, K=4, N=1024, s=0.5: 0.1875 + 1 + 1 = 2.1875.
+        #
+        # S9 asymmetric (--sdoml_asymmetric, tag has "_asym"): bitmap stored
+        # ONLY for the bulk partition (mask1, ~69%). Mid + salient are dense
+        # so no bitmap. Indices for ALL kept positions across all 3 partitions
+        # at log2(K) bits each.
+        #   keep_total = frac_bulk*(1-s) + frac_mid*1 + frac_sal*1
+        #   bpw = G*K*16/N + frac_bulk*1 + keep_total*log2(K)
+        # For frac_bulk=0.69, frac_mid=0.26, frac_sal=0.05, K=4, N=1024, s=0.5:
+        #   keep_total = 0.69*0.5 + 0.26 + 0.05 = 0.655
+        #   bpw = 0.1875 + 0.69 + 0.655*2 = 2.188
+        s_val = float(getattr(args, "sparsity", 0.5))
+        K_val = 4
+        N_rep = 1024
+        G_val = 3
+        if "_asym" in csv_method:
+            # DOML's typical 3-partition split (orders=(1,1,2), up_lim=10).
+            # The salient partition is column-based (~5%), mid is element-
+            # based (~26%), bulk is element-based (~69%). These are nominal
+            # — actual fractions are reported per-block in the smoke log.
+            frac_bulk, frac_mid, frac_sal = 0.69, 0.26, 0.05
+            keep_total = (
+                frac_bulk * (1.0 - s_val) + frac_mid + frac_sal
+            )
+            _run_bpw = (
+                (G_val * K_val * 16.0) / N_rep
+                + frac_bulk * 1.0  # bitmap only for bulk
+                + keep_total * math.log2(K_val)
+            )
+        else:
+            _run_bpw = (
+                (G_val * K_val * 16.0) / N_rep
+                + 1.0
+                + (1.0 - s_val) * math.log2(K_val)
+            )
+    else:
+        _run_bpw = _bpw_map.get(csv_method, '')
     _quant_time = 0.0
 
     # CSV helper
