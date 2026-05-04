@@ -119,9 +119,12 @@ techniques=(
     # "doml"
     # "doml-binary"
     # "braq"
-    # SDOML (S10 integration, full sweep enabled).
-    "sdoml-s50"             # base SDOML, joint mask + Lloyd-Max K=4 single codebook
-    "sdoml-s20"             # base SDOML at sparsity 0.2
+    # SDOML (S10 integration). 2026-05-04: base variants completed cleanly
+    # (jobs 13202971/13202972, full 7-task coverage). Asym variants TLE'd at
+    # 8h (jobs 13202973/13202974 only reached 33/196 sublayers, 17%); see
+    # walltime bump below.
+    #"sdoml-s50"             # base SDOML, joint mask + Lloyd-Max K=4 single codebook
+    #"sdoml-s20"             # base SDOML at sparsity 0.2
     "sdoml_part_asym-s50"   # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
     "sdoml_part_asym-s20"   # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
 )
@@ -207,8 +210,8 @@ get_time_limit() {
         leanquant-nu) echo "06:00:00" ;;  # b2
         sdoml-s50)             echo "08:00:00" ;;  # b2 — same envelope as DOML (S10 mirror)
         sdoml-s20)             echo "08:00:00" ;;  # b2
-        sdoml_part_asym-s50)   echo "08:00:00" ;;  # b2 — asym ~2× DOML layer-0 (S9), DOML budget covers
-        sdoml_part_asym-s20)   echo "08:00:00" ;;  # b2
+        sdoml_part_asym-s50)   echo "44:00:00" ;;  # b4 — 2026-05-04 bump: jobs 13202973/13202974 TLE at 4h (17% complete); per-row loop is ~10× slower than S10 layer-0 estimate
+        sdoml_part_asym-s20)   echo "44:00:00" ;;  # b4
         *)            echo "06:00:00" ;;
     esac
 }
