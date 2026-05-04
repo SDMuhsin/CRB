@@ -143,11 +143,11 @@ techniques=(
     #"doml"
     #"doml-binary"
     #"braq"
-    # SDOML (S10 integration, all commented out by default — enable per-job).
-    "sdoml-s50"             # S10 smoke job: base SDOML at sparsity 0.5 — first Nibi exposure
-    #"sdoml-s20"            # base SDOML at sparsity 0.2
-    #"sdoml_part_asym-s50"  # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
-    #"sdoml_part_asym-s20"  # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
+    # SDOML (S10 integration, full sweep enabled).
+    "sdoml-s50"             # base SDOML, joint mask + Lloyd-Max K=4 single codebook
+    "sdoml-s20"             # base SDOML at sparsity 0.2
+    "sdoml_part_asym-s50"   # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
+    "sdoml_part_asym-s20"   # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
 )
 
 # ============================================================================

@@ -139,12 +139,12 @@ techniques=(
                     # PB-LLM/gptq_pb/datautils.py — ready to re-submit.
     #"doml"          # job 12539878 COMPLETED, PPL 35.01
     # "doml-binary"   # job 12539879 COMPLETED, PPL 42,639
-    "braq"          # job 12539880 COMPLETED, PPL 124k
-    # SDOML (S10 integration, all commented out by default — enable per-job).
-    #"sdoml-s50"            # base SDOML, joint mask + Lloyd-Max K=4 single codebook
-    #"sdoml-s20"            # base SDOML at sparsity 0.2
-    #"sdoml_part_asym-s50"  # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
-    #"sdoml_part_asym-s20"  # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
+    #"braq"         # job 12539880 COMPLETED, PPL 124k (already in CSV — stale from Phase 17)
+    # SDOML (S10 integration, full sweep enabled).
+    "sdoml-s50"             # base SDOML, joint mask + Lloyd-Max K=4 single codebook
+    "sdoml-s20"             # base SDOML at sparsity 0.2
+    "sdoml_part_asym-s50"   # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
+    "sdoml_part_asym-s20"   # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
 )
 
 # ============================================================================

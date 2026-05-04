@@ -132,22 +132,24 @@ PBLLM_HIGH_BIT=8
 
 # Methods to benchmark.
 techniques=(
-    "fp16"
-    "rtn-2bit"
-    "gptq-2bit"
-    "sinq"
-    "lnq"
-    "leanquant-nu"
-    "tesseraq"
-    "pb-llm"
-    "doml"
+    # All non-SDOML methods already in results/qwen3_8b_ptq_benchmark.csv
+    # per Phase 18c audit (511/511 cells, 0 FAILED) — re-firing would waste compute.
+    #"fp16"
+    #"rtn-2bit"
+    #"gptq-2bit"
+    #"sinq"
+    #"lnq"
+    #"leanquant-nu"
+    #"tesseraq"
+    #"pb-llm"
+    #"doml"
     #"doml-binary"
-    "braq"
-    # SDOML (S10 integration, all commented out by default — enable per-job).
-    #"sdoml-s50"            # base SDOML, joint mask + Lloyd-Max K=4 single codebook
-    #"sdoml-s20"            # base SDOML at sparsity 0.2
-    #"sdoml_part_asym-s50"  # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
-    #"sdoml_part_asym-s20"  # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
+    #"braq"
+    # SDOML (S10 integration, full sweep enabled).
+    "sdoml-s50"             # base SDOML, joint mask + Lloyd-Max K=4 single codebook
+    "sdoml-s20"             # base SDOML at sparsity 0.2
+    "sdoml_part_asym-s50"   # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
+    "sdoml_part_asym-s20"   # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
 )
 
 # ============================================================================

@@ -127,23 +127,23 @@ PBLLM_HIGH_BIT=8
 # Qwen3-4B. See ./results/qwen3_4b_ptq_benchmark.csv for what already
 # landed from the 12539xxx batch. Uncomment a line to re-queue that method.
 techniques=(
-    "fp16"          # job 12539882 COMPLETED, PPL 13.67
-    "rtn-2bit"      # job 12539883 COMPLETED, PPL 256,762 (quality collapse)
-    "gptq-2bit"     # job 12539884 COMPLETED, PPL 692.9    (quality collapse)
-    "sinq"          # job 12539885 COMPLETED, PPL 131,113  (quality collapse)
-    "lnq"         # job 12547271 currently RUNNING on 3g.40gb (MIG fix) — do NOT re-queue
-    "leanquant-nu"  # job 12539887 COMPLETED, PPL 45.83
-    "tesseraq"    # job 12547272 currently RUNNING on full h100 (MIG fix) — do NOT re-queue
-    #"pb-llm"        # job 12547273 FAILED (star-import clobbered BILLM_DOWNLOADS_DIR); fixed in
+    #"fp16"         # job 12539882 COMPLETED, PPL 13.67 (already in CSV)
+    #"rtn-2bit"     # job 12539883 COMPLETED, PPL 256,762 (already in CSV)
+    #"gptq-2bit"    # job 12539884 COMPLETED, PPL 692.9 (already in CSV)
+    #"sinq"         # job 12539885 COMPLETED, PPL 131,113 (already in CSV)
+    #"lnq"          # job 12547271 COMPLETED (already in CSV — stale from Phase 13)
+    #"leanquant-nu" # job 12539887 COMPLETED, PPL 45.83 (already in CSV)
+    #"tesseraq"     # job 12547272 COMPLETED (already in CSV — stale from Phase 13)
+    #"pb-llm"       # job 12547273 FAILED (star-import clobbered BILLM_DOWNLOADS_DIR); fixed in
                     # PB-LLM/gptq_pb/datautils.py — ready to re-submit.
-     "doml"          # job 12539890 COMPLETED, PPL 15.84
-    # "doml-binary"   # job 12539891 COMPLETED, PPL 1,634
-     "braq"          # job 12539892 COMPLETED, PPL 357.3
-    # SDOML (S10 integration, all commented out by default — enable per-job).
-    #"sdoml-s50"            # base SDOML, joint mask + Lloyd-Max K=4 single codebook
-    #"sdoml-s20"            # base SDOML at sparsity 0.2
-    #"sdoml_part_asym-s50"  # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
-    #"sdoml_part_asym-s20"  # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
+    #"doml"         # job 12539890 COMPLETED, PPL 15.84 (already in CSV)
+    # "doml-binary" # job 12539891 COMPLETED, PPL 1,634
+    #"braq"         # job 12539892 COMPLETED, PPL 357.3 (already in CSV)
+    # SDOML (S10 integration, full sweep enabled).
+    "sdoml-s50"             # base SDOML, joint mask + Lloyd-Max K=4 single codebook
+    "sdoml-s20"             # base SDOML at sparsity 0.2
+    "sdoml_part_asym-s50"   # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
+    "sdoml_part_asym-s20"   # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
 )
 
 # ============================================================================
