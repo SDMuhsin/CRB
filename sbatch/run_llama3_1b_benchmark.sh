@@ -109,11 +109,22 @@ TESSERAQ_NSAMPLES=512
 PBLLM_METHOD="xnor"
 PBLLM_LOW_FRAC=0.9
 PBLLM_HIGH_BIT=8
+# SparseGPT (ICML 2023) — joint pruning + (optional) quantization SOTA literature
+# baseline. Same calibration budget as LeanQuant_nu (paper Section 5: 128 × 2048
+# C4). The joint sparse+quant runs use the upstream LLaMA driver convention
+# (perchannel=True, sym=False, mse=False).
+SPARSEGPT_CALIB="c4"
+SPARSEGPT_NSAMPLES=128
+SPARSEGPT_SEQLEN=2048
+SPARSEGPT_PERCDAMP=0.01          # paper default
+SPARSEGPT_SPARSITY=0.5           # paper Table 1 setting
 
 # Methods to benchmark — one sbatch job per entry.
 techniques=(
-    # All non-SDOML methods already in results/llama3_1b_ptq_benchmark.csv
-    # per Phase 18c audit (full 11-method × 7-task coverage, 0 FAILED).
+    # 2026-05-04 sparsity-sweep config: only SDOML + SparseGPT variants at
+    # sparsities {5, 25, 50, 75}, plus sparsegpt-2:4-w4 as the fixed structured
+    # comparator. All other methods are already in the per-model CSV from
+    # prior runs (Phase 18c audit, 11 methods × 7 tasks, 0 FAILED).
     #"fp16"
     #"rtn-2bit"
     #"gptq-2bit"
@@ -125,14 +136,33 @@ techniques=(
     #"doml"
     #"doml-binary"
     #"braq"
-    # SDOML (S10 integration). 2026-05-04: base variants completed cleanly
-    # (jobs 13202966/13202967, full 7-task coverage). Asym variants TLE'd at
-    # 5h (jobs 13202968/13202969 only reached 34/112 sublayers, 30%); see
-    # walltime bump below.
-    #"sdoml-s50"             # base SDOML, joint mask + Lloyd-Max K=4 single codebook
-    #"sdoml-s20"             # base SDOML at sparsity 0.2
-    "sdoml_part_asym-s50"   # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
-    "sdoml_part_asym-s20"   # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
+    # SDOML — base K=4 single-codebook (partition=1) joint mask.
+    "sdoml-s5"
+    "sdoml-s25"
+    "sdoml-s50"
+    "sdoml-s75"
+    # SDOML — asymmetric partition (S9 Pareto extension), bulk-only mask.
+    "sdoml_part_asym-s5"
+    "sdoml_part_asym-s25"
+    "sdoml_part_asym-s50"
+    "sdoml_part_asym-s75"
+    # SparseGPT — pure prune (fp16 kept).
+    "sparsegpt-s5"
+    "sparsegpt-s25"
+    "sparsegpt-s50"
+    "sparsegpt-s75"
+    # SparseGPT — joint sparse + 4-bit (paper Table 4 setting).
+    "sparsegpt-s5-w4"
+    "sparsegpt-s25-w4"
+    "sparsegpt-s50-w4"
+    "sparsegpt-s75-w4"
+    # SparseGPT — joint sparse + 2-bit (bpw-matched vs SDOML/DOML at s=0.5).
+    "sparsegpt-s5-w2"
+    "sparsegpt-s25-w2"
+    "sparsegpt-s50-w2"
+    "sparsegpt-s75-w2"
+    # SparseGPT — structured 2:4 + 4-bit (paper N:M, fixed 50%).
+    "sparsegpt-2:4-w4"
 )
 
 # ============================================================================
@@ -183,7 +213,7 @@ get_job_resources() {
             cpus=4
             mem="32G"
             ;;
-        sdoml-s50|sdoml-s20|sdoml_part_asym-s50|sdoml_part_asym-s20)
+        sdoml-s*|sdoml_part_asym-s*)
             # SDOML (S10 integration, 2026-05-03): cheaper per-token than
             # DOML (partition=1 skips DOML's structural partition compute);
             # asymmetric SDOML+partition at most ~2× DOML wall on layer-0
@@ -192,6 +222,14 @@ get_job_resources() {
             gpu_resource="$GPU_MEDIUM"
             cpus=4
             mem="32G"
+            ;;
+        sparsegpt-s*|sparsegpt-2:4-w*)
+            # SparseGPT joint sparse+(quant) baseline. Per-sublayer Hessian +
+            # Cholesky inverse + OBS column sweep — no Lloyd-Max, no AWQ init,
+            # no Fisher. Mirrors leanquant_nu cost profile at this model size.
+            gpu_resource="$GPU_MEDIUM"
+            cpus=4
+            mem="48G"
             ;;
         *)
             # fp16, rtn-2bit, gptq-2bit, sinq, doml, doml-binary, braq.
@@ -221,10 +259,9 @@ get_time_limit() {
         tesseraq)     echo "28:00:00" ;;  # b4 — paper-exact (250 × 16 blocks)
         lnq)          echo "14:00:00" ;;  # b3 — Fisher (1024×4096) + LNQ refine
         leanquant-nu) echo "05:00:00" ;;  # b2
-        sdoml-s50)             echo "05:00:00" ;;  # b2 — same envelope as DOML (S10 mirror)
-        sdoml-s20)             echo "05:00:00" ;;  # b2
-        sdoml_part_asym-s50)   echo "26:00:00" ;;  # b4 — 2026-05-04 bump: jobs 13202968/13202969 TLE at 4h (30% complete); per-row loop is ~10× slower than S10 layer-0 estimate
-        sdoml_part_asym-s20)   echo "26:00:00" ;;  # b4
+        sdoml-s*)             echo "05:00:00" ;;  # b2 — sparsity-sweep pattern (wall mirrors s=0.5 reference run)
+        sdoml_part_asym-s*)  echo "26:00:00" ;;  # asymmetric SDOML+partition (S9 Pareto extension); per-row loop fallback dominates
+        sparsegpt-s*|sparsegpt-2:4-w*)  echo "05:00:00" ;;  # b2 — sparsity-sweep pattern (wall mirrors s=0.5 reference run)
         *)            echo "05:00:00" ;;
     esac
 }
@@ -275,24 +312,44 @@ build_python_cmd() {
         pb-llm)
             echo "python3 -u PB-LLM/gptq_pb/run.py $MODEL $DATASET $PBLLM_METHOD --low_frac $PBLLM_LOW_FRAC --high_bit $PBLLM_HIGH_BIT --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED $common_evals"
             ;;
-        sdoml-s50)
-            # S10 integration: base SDOML (joint mask + K=4 Lloyd-Max single
-            # codebook), partition=1, sparsity=0.5. CSV tag resolved to
-            # `sdoml-s50` by run.py:_resolve_csv_method.
-            echo "python3 -u run.py $MODEL $DATASET sdoml --sparsity 0.5 --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
+        sdoml-s*)
+            # Sparsity-sweep pattern: tag is `sdoml-sNN` where NN is the
+            # sparsity percentage (e.g. sdoml-s5 = 5%, sdoml-s50 = 50%).
+            # CSV tag is resolved by run.py:_resolve_csv_method to match.
+            s_pct=${technique#sdoml-s}
+            if [[ "$s_pct" -lt 10 ]]; then s_frac="0.0${s_pct}"; else s_frac="0.${s_pct}"; fi
+            echo "python3 -u run.py $MODEL $DATASET sdoml --sparsity $s_frac --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
             ;;
-        sdoml-s20)
-            # S10 integration: base SDOML at sparsity 0.2 (less aggressive prune).
-            echo "python3 -u run.py $MODEL $DATASET sdoml --sparsity 0.2 --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
+        sdoml_part_asym-s*)
+            # Sparsity-sweep pattern for asymmetric SDOML+partition (S9).
+            s_pct=${technique#sdoml_part_asym-s}
+            if [[ "$s_pct" -lt 10 ]]; then s_frac="0.0${s_pct}"; else s_frac="0.${s_pct}"; fi
+            echo "python3 -u run.py $MODEL $DATASET sdoml_partition --sparsity $s_frac --sdoml_asymmetric --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
             ;;
-        sdoml_part_asym-s50)
-            # S10 integration: asymmetric SDOML+partition (S9 mandate).
-            # s_bulk=0.5 applied to bulk partition; mid + salient dense.
-            echo "python3 -u run.py $MODEL $DATASET sdoml_partition --sparsity 0.5 --sdoml_asymmetric --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
+        sparsegpt-2:4-w4)
+            # SparseGPT @ 2:4 structured + 4-bit (paper N:M setting). 50%
+            # structured sparsity is hardware-friendly on Hopper sparse cores.
+            echo "python3 -u src/run_sparsegpt.py $MODEL $DATASET --prunen 2 --prunem 4 --nbits 4 --percdamp $SPARSEGPT_PERCDAMP --true_sequential --calib_dataset $SPARSEGPT_CALIB --nsamples $SPARSEGPT_NSAMPLES --seqlen $SPARSEGPT_SEQLEN --seed $SEED --device cuda:0 $common_evals"
             ;;
-        sdoml_part_asym-s20)
-            # S10 integration: asymmetric SDOML+partition, s_bulk=0.2 (S9 best Phi).
-            echo "python3 -u run.py $MODEL $DATASET sdoml_partition --sparsity 0.2 --sdoml_asymmetric --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
+        sparsegpt-s*-w4)
+            # SparseGPT @ unstructured s=NN% + 4-bit (paper Table 4 joint).
+            s_pct=${technique#sparsegpt-s}
+            s_pct=${s_pct%-w4}
+            if [[ "$s_pct" -lt 10 ]]; then s_frac="0.0${s_pct}"; else s_frac="0.${s_pct}"; fi
+            echo "python3 -u src/run_sparsegpt.py $MODEL $DATASET --sparsity $s_frac --nbits 4 --percdamp $SPARSEGPT_PERCDAMP --true_sequential --calib_dataset $SPARSEGPT_CALIB --nsamples $SPARSEGPT_NSAMPLES --seqlen $SPARSEGPT_SEQLEN --seed $SEED --device cuda:0 $common_evals"
+            ;;
+        sparsegpt-s*-w2)
+            # SparseGPT @ unstructured s=NN% + 2-bit (bpw-matched vs SDOML).
+            s_pct=${technique#sparsegpt-s}
+            s_pct=${s_pct%-w2}
+            if [[ "$s_pct" -lt 10 ]]; then s_frac="0.0${s_pct}"; else s_frac="0.${s_pct}"; fi
+            echo "python3 -u src/run_sparsegpt.py $MODEL $DATASET --sparsity $s_frac --nbits 2 --percdamp $SPARSEGPT_PERCDAMP --true_sequential --calib_dataset $SPARSEGPT_CALIB --nsamples $SPARSEGPT_NSAMPLES --seqlen $SPARSEGPT_SEQLEN --seed $SEED --device cuda:0 $common_evals"
+            ;;
+        sparsegpt-s*)
+            # SparseGPT @ unstructured s=NN% + fp16 (paper Table 1 reference).
+            s_pct=${technique#sparsegpt-s}
+            if [[ "$s_pct" -lt 10 ]]; then s_frac="0.0${s_pct}"; else s_frac="0.${s_pct}"; fi
+            echo "python3 -u src/run_sparsegpt.py $MODEL $DATASET --sparsity $s_frac --percdamp $SPARSEGPT_PERCDAMP --true_sequential --calib_dataset $SPARSEGPT_CALIB --nsamples $SPARSEGPT_NSAMPLES --seqlen $SPARSEGPT_SEQLEN --seed $SEED --device cuda:0 $common_evals"
             ;;
         *)
             echo "echo 'Unknown technique: $technique'; exit 1"
@@ -313,10 +370,12 @@ get_technique_desc() {
         doml)         echo "DOML (K=4, Lloyd-Max + GPTQ + structural partition, salient=$SALIENT_METRIC)" ;;
         doml-binary)  echo "DOML-binary (K=2, Lloyd-Max + GPTQ + structural partition)"     ;;
         braq)         echo "BRAQ 1-bit baseline (blocksize=$BLOCKSIZE)"                     ;;
-        sdoml-s50)            echo "SDOML (joint mask + Lloyd-Max K=4, sparsity=0.5, ~2.06 bpw)" ;;
-        sdoml-s20)            echo "SDOML (joint mask + Lloyd-Max K=4, sparsity=0.2, ~2.62 bpw)" ;;
-        sdoml_part_asym-s50)  echo "SDOML+partition asymmetric (s_bulk=0.5, mid+salient dense, S9 ext.)" ;;
-        sdoml_part_asym-s20)  echo "SDOML+partition asymmetric (s_bulk=0.2, S9 best Phi)"      ;;
+        sdoml-s*)            echo "SDOML (joint mask + Lloyd-Max K=4, sparsity-sweep pattern)" ;;
+        sdoml_part_asym-s*) echo "SDOML+partition asymmetric (s_bulk pattern, mid+salient dense, S9)" ;;
+        sparsegpt-2:4-w4)   echo "SparseGPT (2:4 structured + 4-bit, paper N:M)"          ;;
+        sparsegpt-s*-w4)    echo "SparseGPT (s pattern + 4-bit, paper Table 4 joint)"     ;;
+        sparsegpt-s*-w2)    echo "SparseGPT (s pattern + 2-bit, bpw-matched vs SDOML)"    ;;
+        sparsegpt-s*)       echo "SparseGPT (s pattern unstructured + fp16, paper Tbl 1)" ;;
     esac
 }
 

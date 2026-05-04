@@ -129,6 +129,15 @@ TESSERAQ_NSAMPLES=512          # paper default (was 128); 4× more calibration d
 PBLLM_METHOD="xnor"             # PB-LLM partial-binarization variant
 PBLLM_LOW_FRAC=0.9              # fraction of weights kept binary (10% high-prec)
 PBLLM_HIGH_BIT=8                # high-precision tier bit width
+# SparseGPT (ICML 2023) — joint pruning + (optional) quantization SOTA literature
+# baseline. Same calibration budget as LeanQuant_nu (paper Section 5: 128 × 2048
+# C4). The joint sparse+quant runs use the upstream LLaMA driver convention
+# (perchannel=True, sym=False, mse=False).
+SPARSEGPT_CALIB="c4"
+SPARSEGPT_NSAMPLES=128
+SPARSEGPT_SEQLEN=2048
+SPARSEGPT_PERCDAMP=0.01          # paper default
+SPARSEGPT_SPARSITY=0.5           # paper Table 1 setting
 
 # Methods to benchmark — one sbatch job per entry.
 techniques=(
@@ -151,6 +160,12 @@ techniques=(
     #"sdoml-s20"             # base SDOML at sparsity 0.2
     "sdoml_part_asym-s50"   # asymmetric SDOML+partition (S9 Pareto extension), s_bulk=0.5
     "sdoml_part_asym-s20"   # asymmetric SDOML+partition at sparsity 0.2 (S9 best Phi)
+    # SparseGPT (Frantar & Alistarh, ICML 2023) — joint sparse+quant SOTA baseline.
+    # 4 entries: pure prune, paper joint setting, bpw-matched-vs-SDOML, structured.
+    #"sparsegpt-s50"         # paper Table 1: 50% unstructured + fp16 (~9 bpw)
+    #"sparsegpt-s50-w4"      # paper Table 4: 50% + 4-bit (joint, ~3.03 bpw)
+    #"sparsegpt-s50-w2"      # bpw-matched vs SDOML/DOML (~2.03 bpw)
+    #"sparsegpt-2:4-w4"      # structured 2:4 + 4-bit (paper N:M)
 )
 
 # ============================================================================
@@ -227,6 +242,15 @@ get_job_resources() {
             cpus=4
             mem="24G"
             ;;
+        sparsegpt-s50|sparsegpt-s50-w4|sparsegpt-s50-w2|sparsegpt-2:4-w4)
+            # SparseGPT joint sparse+(quant) baseline. Per-sublayer Hessian +
+            # Cholesky inverse + OBS column sweep — no Lloyd-Max, no AWQ init,
+            # no Fisher. Smoke-measured on Qwen3-0.6B dev box A40: ~3.5 min
+            # quantize / ~5 GB peak GPU. 1g.10gb (10 GB) is comfortable.
+            gpu_resource="$GPU_SMALL"
+            cpus=4
+            mem="24G"
+            ;;
         *)
             # fp16, rtn-2bit, gptq-2bit, sinq, doml, doml-binary, braq.
             # Phase 16: RAM 16 → 24 GB even though prior runs succeeded —
@@ -263,6 +287,10 @@ get_time_limit() {
         sdoml-s20)             echo "04:00:00" ;;  # b2
         sdoml_part_asym-s50)   echo "16:00:00" ;;  # b3 — 2026-05-04 bump: jobs 13202949/13202950 TLE at 4h (52% complete); per-row loop is ~10× slower than S10 layer-0 estimate
         sdoml_part_asym-s20)   echo "16:00:00" ;;  # b3
+        sparsegpt-s50)         echo "04:00:00" ;;  # b2 — smoke 4 min quantize on dev A40 + ~2 h evals + margin
+        sparsegpt-s50-w4)      echo "04:00:00" ;;  # b2 — same quant cost as s50
+        sparsegpt-s50-w2)      echo "04:00:00" ;;  # b2
+        sparsegpt-2:4-w4)      echo "04:00:00" ;;  # b2
         *)            echo "04:00:00" ;;
     esac
 }
@@ -348,6 +376,28 @@ build_python_cmd() {
             # S10 integration: asymmetric SDOML+partition, s_bulk=0.2 (S9 best Phi).
             echo "python3 -u run.py $MODEL $DATASET sdoml_partition --sparsity 0.2 --sdoml_asymmetric --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
             ;;
+        sparsegpt-s50)
+            # SparseGPT @ 50% unstructured + fp16 (paper Table 1 reference).
+            # Method tag in CSV resolved to `sparsegpt-s50` by csv_method_tag()
+            # in src/run_sparsegpt.py.
+            echo "python3 -u src/run_sparsegpt.py $MODEL $DATASET --sparsity $SPARSEGPT_SPARSITY --percdamp $SPARSEGPT_PERCDAMP --true_sequential --calib_dataset $SPARSEGPT_CALIB --nsamples $SPARSEGPT_NSAMPLES --seqlen $SPARSEGPT_SEQLEN --seed $SEED --device cuda:0 $common_evals"
+            ;;
+        sparsegpt-s50-w4)
+            # SparseGPT @ 50% + 4-bit (paper Table 4 joint sparse+quant setting).
+            # bpw ≈ 3.03 (1 bitmap + 0.5*4 + 32/cols).
+            echo "python3 -u src/run_sparsegpt.py $MODEL $DATASET --sparsity $SPARSEGPT_SPARSITY --nbits 4 --percdamp $SPARSEGPT_PERCDAMP --true_sequential --calib_dataset $SPARSEGPT_CALIB --nsamples $SPARSEGPT_NSAMPLES --seqlen $SPARSEGPT_SEQLEN --seed $SEED --device cuda:0 $common_evals"
+            ;;
+        sparsegpt-s50-w2)
+            # SparseGPT @ 50% + 2-bit (bpw-matched ≈ 2.03 bpw vs SDOML 2.06,
+            # DOML 2.09). Likely catastrophically collapses on small models —
+            # that IS the SDOML paper claim.
+            echo "python3 -u src/run_sparsegpt.py $MODEL $DATASET --sparsity $SPARSEGPT_SPARSITY --nbits 2 --percdamp $SPARSEGPT_PERCDAMP --true_sequential --calib_dataset $SPARSEGPT_CALIB --nsamples $SPARSEGPT_NSAMPLES --seqlen $SPARSEGPT_SEQLEN --seed $SEED --device cuda:0 $common_evals"
+            ;;
+        sparsegpt-2:4-w4)
+            # SparseGPT @ 2:4 structured + 4-bit (paper N:M setting). 50%
+            # structured sparsity is hardware-friendly on Hopper sparse cores.
+            echo "python3 -u src/run_sparsegpt.py $MODEL $DATASET --prunen 2 --prunem 4 --nbits 4 --percdamp $SPARSEGPT_PERCDAMP --true_sequential --calib_dataset $SPARSEGPT_CALIB --nsamples $SPARSEGPT_NSAMPLES --seqlen $SPARSEGPT_SEQLEN --seed $SEED --device cuda:0 $common_evals"
+            ;;
         *)
             echo "echo 'Unknown technique: $technique'; exit 1"
             ;;
@@ -371,6 +421,10 @@ get_technique_desc() {
         sdoml-s20)            echo "SDOML (joint mask + Lloyd-Max K=4, sparsity=0.2, ~2.62 bpw)" ;;
         sdoml_part_asym-s50)  echo "SDOML+partition asymmetric (s_bulk=0.5, mid+salient dense, S9 ext.)" ;;
         sdoml_part_asym-s20)  echo "SDOML+partition asymmetric (s_bulk=0.2, S9 best Phi)"      ;;
+        sparsegpt-s50)        echo "SparseGPT (s=$SPARSEGPT_SPARSITY unstructured + fp16, paper Table 1)" ;;
+        sparsegpt-s50-w4)     echo "SparseGPT (s=$SPARSEGPT_SPARSITY + 4-bit, paper Table 4 joint)" ;;
+        sparsegpt-s50-w2)     echo "SparseGPT (s=$SPARSEGPT_SPARSITY + 2-bit, bpw-matched vs SDOML)" ;;
+        sparsegpt-2:4-w4)     echo "SparseGPT (2:4 structured + 4-bit, paper N:M)"             ;;
     esac
 }
 
