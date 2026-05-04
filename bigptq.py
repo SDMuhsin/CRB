@@ -206,7 +206,7 @@ class BRAGPTQ:
 
                     sparsity = float(getattr(self.braq_quantizer,
                                               'sparsity', 0.5))
-                    K_sd = int(getattr(self.braq_quantizer, 'sdoml_K', 4))
+                    K_sd = int(getattr(self.braq_quantizer, 'codebook_K', 4))
                     n_iter_sd = int(getattr(self.braq_quantizer,
                                              'sdoml_n_iter', 20))
                     # S9: optional per-partition sparsity vector. When None,
@@ -337,7 +337,7 @@ class BRAGPTQ:
 
                     sparsity = float(getattr(self.braq_quantizer,
                                               'sparsity', 0.5))
-                    K_sd = int(getattr(self.braq_quantizer, 'sdoml_K', 4))
+                    K_sd = int(getattr(self.braq_quantizer, 'codebook_K', 4))
                     n_iter_sd = int(getattr(self.braq_quantizer,
                                              'sdoml_n_iter', 20))
 
@@ -406,7 +406,7 @@ class BRAGPTQ:
 
                     sparsity = float(getattr(self.braq_quantizer,
                                               'sparsity', 0.5))
-                    K_sd = int(getattr(self.braq_quantizer, 'sdoml_K', 4))
+                    K_sd = int(getattr(self.braq_quantizer, 'codebook_K', 4))
                     n_iter_sd = int(getattr(self.braq_quantizer,
                                              'sdoml_n_iter', 20))
 

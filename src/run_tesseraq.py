@@ -1171,9 +1171,13 @@ def main():
     print(f"  PPL eval datasets: {eval_flags['ppl_datasets']}")
     print(f"{'='*60}")
 
+    # Self-describing CSV tag: append "-3bit" / "-4bit" suffix when bit-width
+    # differs from the paper-default 2-bit (preserves byte-identical "tesseraq"
+    # tag for legacy 2-bit rows).
+    csv_method = "tesseraq" if args.bit == 2 else f"tesseraq-{args.bit}bit"
     evaluate_and_log_all(
         model, args.model, torch.device(args.device),
-        method="tesseraq",
+        method=csv_method,
         bpw=bpw, seed=args.seed, blocksize=args.group_size,
         salient_metric="",
         extra_params=extra,

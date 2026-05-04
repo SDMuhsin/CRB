@@ -1196,6 +1196,11 @@ def main():
             method = "guidedquant"
     else:
         method = "lnq"
+    # Self-describing CSV tag: append "-3bit" / "-4bit" suffix when bit-width
+    # differs from the paper-default 2-bit (preserves byte-identical legacy
+    # "lnq" / "guidedquant" / "guidedquant_nosal" tags for 2-bit rows).
+    if args.nbits != 2:
+        method = f"{method}-{args.nbits}bit"
 
     # Phase 0: Compute Fisher data if full pipeline
     weight_grads, saliency_data = None, None

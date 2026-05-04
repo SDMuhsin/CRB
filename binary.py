@@ -3584,8 +3584,10 @@ def lloyd_max_quantize(x, mask, K=4, iters=20):
         init_positions = torch.tensor([-0.7979, 0.7979],
                                        device=x.device, dtype=x.dtype)
     else:
-        # Generic uniform initialization across ±2σ
-        init_positions = torch.linspace(-1.5, 1.5, K, device=x.device, dtype=x.dtype)
+        # Equal-probability quantile midpoints under unit Gaussian. Lloyd-Max
+        # iterations refine these toward the per-row optimum; works for any K.
+        quantiles = (torch.arange(K, device=x.device, dtype=torch.float32) + 0.5) / K
+        init_positions = torch.distributions.Normal(0.0, 1.0).icdf(quantiles).to(dtype=x.dtype)
 
     # levels shape: [rows, K]
     levels = row_mean + row_std * init_positions.unsqueeze(0)  # [rows, K]
@@ -3718,9 +3720,11 @@ class Binarization(nn.Module):
             w=(w>0).float()
             w*=self.scale[groupi]
         elif self.method=="doml":
-            # Distribution-Optimal Multi-Level Quantization
-            # K=4 levels (2 bits), per-row Lloyd-Max optimal placement
-            w = lloyd_max_quantize(w, mask, K=4, iters=20)
+            # Distribution-Optimal Multi-Level Quantization. K = 2**codebook_bits
+            # levels per row via Lloyd-Max; default K=4 (2-bit) when the
+            # codebook_K attribute is not set (preserves legacy DOML calls).
+            K_doml = int(getattr(self, "codebook_K", 4))
+            w = lloyd_max_quantize(w, mask, K=K_doml, iters=20)
         elif self.method=="doml_binary":
             # DOML at K=2: per-row Lloyd-Max optimal binary (1 bit)
             w = lloyd_max_quantize(w, mask, K=2, iters=20)
@@ -3731,7 +3735,7 @@ class Binarization(nn.Module):
             # is the Hessian-derived per-column importance vector wired in by
             # bigptq.fasterquant — derivation §4 mandates Hessian-weighting.
             sparsity = float(getattr(self, "sparsity", 0.5))
-            K_sd = int(getattr(self, "sdoml_K", 4))
+            K_sd = int(getattr(self, "codebook_K", 4))
             n_iter_sd = int(getattr(self, "sdoml_n_iter", 20))
             if col_weights is None:
                 # Fallback when caller has not yet wired Hessian weights:
@@ -3752,7 +3756,7 @@ class Binarization(nn.Module):
             # uninformed per-row partition assumption (single-partition collapse)
             # so callers should prefer the bigptq path.
             sparsity = float(getattr(self, "sparsity", 0.5))
-            K_sd = int(getattr(self, "sdoml_K", 4))
+            K_sd = int(getattr(self, "codebook_K", 4))
             n_iter_sd = int(getattr(self, "sdoml_n_iter", 20))
             if col_weights is None:
                 col_w_local = torch.ones(w.shape[1], device=w.device,

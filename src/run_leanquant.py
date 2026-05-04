@@ -649,7 +649,7 @@ def main():
 
     # Core LeanQuant hyperparameters
     parser.add_argument(
-        "--nbits", type=int, default=2, choices=[2, 3, 4],
+        "--nbits", type=int, default=2, choices=[2, 3, 4, 5],
         help="Bits per weight (K = 2^nbits levels per row)",
     )
     parser.add_argument(
@@ -744,7 +744,10 @@ def main():
         "calib_dataset": calib_dataset,
         "calib_seqlen": calib_seqlen,
     }
-    method = "leanquant_nu"
+    # Self-describing CSV tag: append "-3bit" / "-4bit" suffix when bit-width
+    # differs from the paper-default 2-bit (preserves byte-identical legacy
+    # "leanquant_nu" tag for 2-bit rows).
+    method = "leanquant_nu" if args.nbits == 2 else f"leanquant_nu-{args.nbits}bit"
     eval_flags = resolve_eval_flags(args, primary_dataset=args.dataset)
 
     model_short = args.model.split("/")[-1]

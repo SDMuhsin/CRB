@@ -332,6 +332,13 @@ def quant_sequential(model, dataloader, dev):
                     lam = args.lam,
                     coupling = args.coupling
                 )
+                # Codebook size for the DOML / SDOML / magfit family.
+                # K = 2**codebook_bits levels per row. Read by binary.py
+                # dispatch and the SDOML branches in bigptq.fasterquant.
+                # doml_binary is hardcoded to K=2 in binary.py and ignores
+                # this attribute.
+                if sublayer_method in ('doml', 'sdoml', 'sdoml_partition', 'magfit'):
+                    braq_quantizer.codebook_K = 2 ** int(args.codebook_bits)
                 # SDOML: forward sparsity + n_iter onto the quantizer so
                 # bigptq.fasterquant can read them via getattr. Per derivation
                 # §1.3 and S4 contract. n_iter=1 selects the 1-pass ablation
@@ -924,6 +931,18 @@ if __name__ == "__main__":
              "pruning across partitions destroys mask3's salient columns.",
     )
     parser.add_argument(
+        "--codebook_bits",
+        type=int,
+        default=2,
+        choices=[1, 2, 3, 4, 5],
+        help="For doml/sdoml/sdoml_partition/magfit: K = 2**codebook_bits "
+             "Lloyd-Max codebook levels per row. Default 2 (K=4, 2-bit) "
+             "preserves the legacy DOML operating point. Use 3 for K=8 "
+             "(3-bit codebook), 4 for K=16 (4-bit codebook), or 5 for "
+             "K=32 (5-bit codebook). doml_binary ignores this — it is "
+             "always K=2 (1-bit).",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="cuda:0",
@@ -1056,6 +1075,13 @@ if __name__ == "__main__":
                 return f"rtn-{base}"
             if getattr(_args, "partition", 3) == 1 and getattr(_args, "global_scale", False):
                 return f"gptq-{base}"
+        # Codebook bit-width suffix for DOML-family methods. Default 2 (K=4)
+        # produces no suffix so legacy CSV rows stay byte-identical. Other
+        # values append e.g. "-3bit" / "-4bit" for self-describing tags.
+        cb_bits = int(getattr(_args, "codebook_bits", 2))
+        cb_suffix = "" if cb_bits == 2 else f"-{cb_bits}bit"
+        if base == "doml":
+            return f"doml{cb_suffix}"
         if base == "sdoml":
             # Self-describing tag: e.g. sdoml-s50 for sparsity=0.5.
             # If sdoml_n_iter == 1 (S6 ablation) append '-1pass' so the row
@@ -1065,11 +1091,11 @@ if __name__ == "__main__":
             tag = f"sdoml-s{s_pct}"
             if n_iter == 1:
                 tag = f"{tag}-1pass"
-            return tag
+            return f"{tag}{cb_suffix}"
         if base == "magfit":
             # S6 ablation tag: e.g. magfit-s50 for sparsity=0.5.
             s_pct = int(round(float(getattr(_args, "sparsity", 0.5)) * 100))
-            return f"magfit-s{s_pct}"
+            return f"magfit-s{s_pct}{cb_suffix}"
         if base == "sdoml_partition":
             # S8 tag: SDOML+partition with sparsity, e.g. sdoml_partition-s50.
             # S9 (2026-05-03): when --sdoml_asymmetric, append "_asym" so
@@ -1082,7 +1108,7 @@ if __name__ == "__main__":
                 tag = f"{tag}_asym"
             if n_iter == 1:
                 tag = f"{tag}-1pass"
-            return tag
+            return f"{tag}{cb_suffix}"
         return base
 
     csv_method = _resolve_csv_method(args)
@@ -1095,7 +1121,17 @@ if __name__ == "__main__":
         'rtn-2bit': 2.0, 'rtn-3bit': 3.0, 'rtn-4bit': 4.0,
         'gptq-2bit': 2.0, 'gptq-3bit': 3.0, 'gptq-4bit': 4.0,
     }
-    if csv_method.startswith("sdoml-s") or csv_method.startswith("magfit-s"):
+    if csv_method.startswith("doml-") and csv_method.endswith("bit"):
+        # K-bit DOML (K = 2**codebook_bits, codebook_bits != 2). 3-way
+        # structural partition (G=3) → 3 codebooks per row × K levels × 16 bit.
+        #   bpw = log2(K) + G*K*16/N
+        # Representative N=1024 (Qwen3-0.6B hidden); larger models give
+        # slightly lower codebook overhead — the value reported here is
+        # an upper-bound approximation.
+        K_val = 2 ** int(getattr(args, "codebook_bits", 2))
+        N_rep = 1024
+        _run_bpw = math.log2(K_val) + 3 * K_val * 16.0 / N_rep
+    elif csv_method.startswith("sdoml-s") or csv_method.startswith("magfit-s"):
         # Effective bpw under bitmap encoding (C4): K*16/N + 1 + (1-s)*log2(K).
         # We use a representative N (model.config.hidden_size if available
         # later, but at this point the model is not loaded; use a typical
@@ -1106,7 +1142,7 @@ if __name__ == "__main__":
         # SAME bitmap+codebook layout as SDOML so the bpw formula matches —
         # only the (mask, codebook) joint optimisation differs.
         s_val = float(getattr(args, "sparsity", 0.5))
-        K_val = 4
+        K_val = 2 ** int(getattr(args, "codebook_bits", 2))
         N_rep = 1024
         _run_bpw = (K_val * 16.0) / N_rep + 1.0 + (1.0 - s_val) * math.log2(K_val)
     elif csv_method.startswith("sdoml_partition-s"):
@@ -1126,7 +1162,7 @@ if __name__ == "__main__":
         #   keep_total = 0.69*0.5 + 0.26 + 0.05 = 0.655
         #   bpw = 0.1875 + 0.69 + 0.655*2 = 2.188
         s_val = float(getattr(args, "sparsity", 0.5))
-        K_val = 4
+        K_val = 2 ** int(getattr(args, "codebook_bits", 2))
         N_rep = 1024
         G_val = 3
         if "_asym" in csv_method:
