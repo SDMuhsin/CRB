@@ -392,13 +392,23 @@ def quant_sequential(model, dataloader, dev):
                 print(i, name)
                 print("Quantizing ...")
                 if args.low_quant_method in ('doml', 'doml_binary'):
-                    # DOML: use structural partition (same as BRAQ),
-                    # but with Lloyd-Max quantizer per partition
+                    # DOML: per-row Lloyd-Max with structural partition.
+                    # `doml_binary` is always partition=3. `doml` honors
+                    # --partition for the partition×K reviewer-defense
+                    # ablation: partition=3 (default, legacy) gives 3
+                    # codebooks per row; partition=1 collapses to a single
+                    # per-row codebook (no salient/mid/bulk split).
+                    if args.low_quant_method == 'doml' and int(getattr(args, 'partition', 3)) == 1:
+                        _doml_partition = 1
+                        _doml_orders = (1,)
+                    else:
+                        _doml_partition = 3
+                        _doml_orders = (1, 1, 1)  # order ignored by DOML quantizer
                     info = gptq[name].fasterquant(
                         percdamp=args.percdamp,
                         blocksize=args.blocksize,
-                        partition=3,
-                        orders=(1,1,1),  # order ignored by DOML quantizer
+                        partition=_doml_partition,
+                        orders=_doml_orders,
                     )
                 elif args.low_quant_method == 'sdoml':
                     # SDOML: single per-row codebook (no structural partition).
@@ -1081,7 +1091,12 @@ if __name__ == "__main__":
         cb_bits = int(getattr(_args, "codebook_bits", 2))
         cb_suffix = "" if cb_bits == 2 else f"-{cb_bits}bit"
         if base == "doml":
-            return f"doml{cb_suffix}"
+            # partition×K ablation tag: --partition 1 (single-codebook DOML)
+            # appends "-p1" before the codebook-bits suffix. Default
+            # partition=3 leaves the legacy tag byte-identical so existing
+            # CSV rows are unaffected.
+            p1_suffix = "-p1" if int(getattr(_args, "partition", 3)) == 1 else ""
+            return f"doml{p1_suffix}{cb_suffix}"
         if base == "sdoml":
             # Self-describing tag: e.g. sdoml-s50 for sparsity=0.5.
             # If sdoml_n_iter == 1 (S6 ablation) append '-1pass' so the row
@@ -1121,7 +1136,14 @@ if __name__ == "__main__":
         'rtn-2bit': 2.0, 'rtn-3bit': 3.0, 'rtn-4bit': 4.0,
         'gptq-2bit': 2.0, 'gptq-3bit': 3.0, 'gptq-4bit': 4.0,
     }
-    if csv_method.startswith("doml-") and csv_method.endswith("bit"):
+    if csv_method == "doml-p1" or (csv_method.startswith("doml-p1-") and csv_method.endswith("bit")):
+        # Partition×K ablation: DOML with partition=1 → single per-row
+        # codebook. bpw = log2(K) + 1*K*16/N (no salient/mid/bulk split).
+        # Representative N=1024 (Qwen3-0.6B hidden).
+        K_val = 2 ** int(getattr(args, "codebook_bits", 2))
+        N_rep = 1024
+        _run_bpw = math.log2(K_val) + K_val * 16.0 / N_rep
+    elif csv_method.startswith("doml-") and csv_method.endswith("bit"):
         # K-bit DOML (K = 2**codebook_bits, codebook_bits != 2). 3-way
         # structural partition (G=3) → 3 codebooks per row × K levels × 16 bit.
         #   bpw = log2(K) + G*K*16/N
