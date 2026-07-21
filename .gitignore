@@ -26,9 +26,14 @@ result
 
 logs
 results
+temp/
 .claude
 CLAUDE.md
 
 # Secrets
 .hf_token
 
+!cpu_baselines/results/
+!cpu_baselines/results/*.csv
+*.log
+frozen_ref**

@@ -1,0 +1,68 @@
+diff --git a/marlin/marlin_cuda_kernel.cu b/marlin/marlin_cuda_kernel.cu
+index ae4cef5..80357a5 100644
+--- a/marlin/marlin_cuda_kernel.cu
++++ b/marlin/marlin_cuda_kernel.cu
+@@ -78,6 +78,28 @@ __device__ inline void cp_async4_stream(void* smem_ptr, const void* glob_ptr) {
+   );
+ }
+ 
++// RACE FIX (DOML kernel project, 2026-07-06): direct generic-proxy volatile
++// vectorized global load. The original global_reduce fetched the previous
++// threadblock's FP16 partial results from C via cp.async (async proxy).
++// cp.async reads are not guaranteed to be ordered with the generic-proxy
++// ld.global.acquire / fence.acq_rel lock protocol of barrier_acquire /
++// barrier_release (PTX cross-proxy memory-model rule; see also upstream
++// issue IST-DASLab/marlin#42). On A40 (SM86) built with CUDA 12.5 this is a
++// real, measured data race: nondeterministic outputs (max elementwise diff
++// ~20-45) for prob_m >= 512 whenever a column slice is k-split across
++// threadblocks. Loading the partials with ld.volatile.global.v4 keeps the
++// access in the generic proxy, where the acquire fence orders it correctly.
++// Semantics are otherwise identical to the original code.
++__device__ inline int4 ld_volatile_global4(const void* glob_ptr) {
++  int4 v;
++  asm volatile(
++    "ld.volatile.global.v4.b32 {%0, %1, %2, %3}, [%4];\n"
++    : "=r"(v.x), "=r"(v.y), "=r"(v.z), "=r"(v.w)
++    : "l"(glob_ptr)
++  );
++  return v;
++}
++
+ // Async copy fence.
+ __device__ inline void cp_async_fence() {
+   asm volatile("cp.async.commit_group;\n" ::);
+@@ -526,26 +548,18 @@ __global__ void Marlin(
+ 
+       int row = (threadIdx.x % 32) / 4;
+ 
+-      if (!first) {
+-        // Interestingly, doing direct global accesses here really seems to mess up the compiler and lead to slowdowns,
+-        // hence we also use async-copies even though these fetches are not actually asynchronous.
+-        #pragma unroll
+-        for (int i = 0; i < thread_m_blocks * 4; i++) {
+-          cp_async4_pred(
+-            &sh[c_sh_wr + c_sh_wr_delta * i],
+-            &C[c_gl_wr + c_gl_wr_delta_o * (i / 2) + c_gl_wr_delta_i * (i % 2)],
+-            i < (thread_m_blocks - 1) * 4 || 8 * (i / 2) + row < prob_m
+-          );
+-        }
+-        cp_async_fence();
+-        cp_async_wait<0>();
+-      }
+-
++      // RACE FIX (DOML kernel project): the cp.async prefetch of the previous
++      // block's partials that used to live here was an async-proxy read not
++      // ordered by the lock's acquire fence -> measured nondeterminism on
++      // SM86/CUDA 12.5. Replaced by direct ld.volatile.global.v4 loads below
++      // (generic proxy, correctly ordered). See ld_volatile_global4 above.
+       #pragma unroll
+       for (int i = 0; i < thread_m_blocks * 4; i++) {
+         if (i < (thread_m_blocks - 1) * 4 || 8 * (i / 2) + row < prob_m) {
+           if (!first) {
+-            int4 c_red = sh[c_sh_wr + i * c_sh_wr_delta];
++            int4 c_red = ld_volatile_global4(
++              &C[c_gl_wr + c_gl_wr_delta_o * (i / 2) + c_gl_wr_delta_i * (i % 2)]
++            );
+             #pragma unroll
+             for (int j = 0; j < 2 * 4; j++) {
+               reinterpret_cast<float*>(&frag_c)[4 * 2 * 4 * (i / 4) + 4 * j + (i % 4)] += __half2float(

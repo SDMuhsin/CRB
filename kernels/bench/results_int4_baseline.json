@@ -1,0 +1,777 @@
+{
+  "meta": {
+    "baseline_kernel": "Marlin FP16xINT4 (sym, groupsize=128) + race-fix patch",
+    "marlin_repo": "https://github.com/IST-DASLab/marlin",
+    "marlin_commit": "1f25790bdd49fba53106164a24666dade68d7c90",
+    "local_patch": "kernels/third_party/marlin_racefix.patch (global_reduce: cp.async -> ld.volatile.global.v4; fixes measured nondeterminism at M>=512 on A40/CUDA 12.5)",
+    "vendored_source": "kernels/third_party/marlin/",
+    "gpu": "NVIDIA A40",
+    "compute_capability": "8.6",
+    "torch": "2.5.1+cu124",
+    "cuda_runtime": "12.4",
+    "seed": 0,
+    "groupsize": 128,
+    "timestamp_utc": "2026-07-06T00:51:16.858588+00:00",
+    "measurement_contract": "kernels/bench/bench_utils.py",
+    "reference": "float32 GEMM of the dequantized INT4 weights"
+  },
+  "records": [
+    {
+      "K": 1024,
+      "N": 1024,
+      "groupsize": 128,
+      "weight_bytes_total": 540672,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            64,
+            2048
+          ],
+          "dtype": "torch.int32",
+          "bytes": 524288
+        },
+        "scales_s": {
+          "shape": [
+            8,
+            1024
+          ],
+          "dtype": "torch.float16",
+          "bytes": 16384
+        },
+        "workspace": {
+          "shape": [
+            128
+          ],
+          "dtype": "torch.int32",
+          "bytes": 512
+        }
+      },
+      "M": 1,
+      "correctness": {
+        "max_rel": 0.07910706847906113,
+        "mean_rel": 0.0009180685156024992,
+        "rms_rel": 0.0005070484476163983,
+        "cos_sim": 0.9999999403953552,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 2048,
+      "baseline_allocated_bytes": 11160064,
+      "latency_ms": {
+        "mean_ms": 0.02507552018389106,
+        "median_ms": 0.02457600086927414,
+        "min_ms": 0.022784000262618065,
+        "max_ms": 0.05119999870657921,
+        "p90_ms": 0.02582399919629097,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 2048,
+        "median_ms": 0.027807999402284622,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 1024,
+      "N": 1024,
+      "groupsize": 128,
+      "weight_bytes_total": 540672,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            64,
+            2048
+          ],
+          "dtype": "torch.int32",
+          "bytes": 524288
+        },
+        "scales_s": {
+          "shape": [
+            8,
+            1024
+          ],
+          "dtype": "torch.float16",
+          "bytes": 16384
+        },
+        "workspace": {
+          "shape": [
+            128
+          ],
+          "dtype": "torch.int32",
+          "bytes": 512
+        }
+      },
+      "M": 16,
+      "correctness": {
+        "max_rel": 3.7804758548736572,
+        "mean_rel": 0.0016275166999548674,
+        "rms_rel": 0.00048503748257644475,
+        "cos_sim": 0.9999999403953552,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 32768,
+      "baseline_allocated_bytes": 11190784,
+      "latency_ms": {
+        "mean_ms": 0.025189440101385116,
+        "median_ms": 0.02457600086927414,
+        "min_ms": 0.023552000522613525,
+        "max_ms": 0.030719999223947525,
+        "p90_ms": 0.026528000831604004,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 32768,
+        "median_ms": 0.03379200026392937,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 1024,
+      "N": 1024,
+      "groupsize": 128,
+      "weight_bytes_total": 540672,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            64,
+            2048
+          ],
+          "dtype": "torch.int32",
+          "bytes": 524288
+        },
+        "scales_s": {
+          "shape": [
+            8,
+            1024
+          ],
+          "dtype": "torch.float16",
+          "bytes": 16384
+        },
+        "workspace": {
+          "shape": [
+            128
+          ],
+          "dtype": "torch.int32",
+          "bytes": 512
+        }
+      },
+      "M": 2048,
+      "correctness": {
+        "max_rel": 33.663917541503906,
+        "mean_rel": 0.0006739456439390779,
+        "rms_rel": 0.000265914888586849,
+        "cos_sim": 0.9999999403953552,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 4194304,
+      "baseline_allocated_bytes": 15352320,
+      "latency_ms": {
+        "mean_ms": 0.07138752177357674,
+        "median_ms": 0.07168000191450119,
+        "min_ms": 0.06963200122117996,
+        "max_ms": 0.08396799862384796,
+        "p90_ms": 0.07168000191450119,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 4194304,
+        "median_ms": 0.04710400104522705,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 2048,
+      "N": 2048,
+      "groupsize": 128,
+      "weight_bytes_total": 2162688,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            128,
+            4096
+          ],
+          "dtype": "torch.int32",
+          "bytes": 2097152
+        },
+        "scales_s": {
+          "shape": [
+            16,
+            2048
+          ],
+          "dtype": "torch.float16",
+          "bytes": 65536
+        },
+        "workspace": {
+          "shape": [
+            256
+          ],
+          "dtype": "torch.int32",
+          "bytes": 1024
+        }
+      },
+      "M": 1,
+      "correctness": {
+        "max_rel": 1.2986516952514648,
+        "mean_rel": 0.0015680218348279595,
+        "rms_rel": 0.00036589649971574545,
+        "cos_sim": 0.9999999403953552,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 4096,
+      "baseline_allocated_bytes": 19076096,
+      "latency_ms": {
+        "mean_ms": 0.023010560087859632,
+        "median_ms": 0.02252800017595291,
+        "min_ms": 0.021503999829292297,
+        "max_ms": 0.03481600061058998,
+        "p90_ms": 0.023552000522613525,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 4096,
+        "median_ms": 0.03379200026392937,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 2048,
+      "N": 2048,
+      "groupsize": 128,
+      "weight_bytes_total": 2162688,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            128,
+            4096
+          ],
+          "dtype": "torch.int32",
+          "bytes": 2097152
+        },
+        "scales_s": {
+          "shape": [
+            16,
+            2048
+          ],
+          "dtype": "torch.float16",
+          "bytes": 65536
+        },
+        "workspace": {
+          "shape": [
+            256
+          ],
+          "dtype": "torch.int32",
+          "bytes": 1024
+        }
+      },
+      "M": 16,
+      "correctness": {
+        "max_rel": 3.8759799003601074,
+        "mean_rel": 0.0010982421226799488,
+        "rms_rel": 0.00036898645339533687,
+        "cos_sim": 0.9999998807907104,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 65536,
+      "baseline_allocated_bytes": 19137536,
+      "latency_ms": {
+        "mean_ms": 0.023168960232287646,
+        "median_ms": 0.022784000262618065,
+        "min_ms": 0.02252800017595291,
+        "max_ms": 0.03276799991726875,
+        "p90_ms": 0.023552000522613525,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 65536,
+        "median_ms": 0.03481600061058998,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 2048,
+      "N": 2048,
+      "groupsize": 128,
+      "weight_bytes_total": 2162688,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            128,
+            4096
+          ],
+          "dtype": "torch.int32",
+          "bytes": 2097152
+        },
+        "scales_s": {
+          "shape": [
+            16,
+            2048
+          ],
+          "dtype": "torch.float16",
+          "bytes": 65536
+        },
+        "workspace": {
+          "shape": [
+            256
+          ],
+          "dtype": "torch.int32",
+          "bytes": 1024
+        }
+      },
+      "M": 2048,
+      "correctness": {
+        "max_rel": 159.49700927734375,
+        "mean_rel": 0.0004120775265619159,
+        "rms_rel": 0.00020645106269512326,
+        "cos_sim": 1.0,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 8388608,
+      "baseline_allocated_bytes": 27460608,
+      "latency_ms": {
+        "mean_ms": 0.199460476487875,
+        "median_ms": 0.19968000054359436,
+        "min_ms": 0.19763199985027313,
+        "max_ms": 0.21299199759960175,
+        "p90_ms": 0.20070399343967438,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 8388608,
+        "median_ms": 0.187391996383667,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "groupsize": 128,
+      "weight_bytes_total": 8650752,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            256,
+            8192
+          ],
+          "dtype": "torch.int32",
+          "bytes": 8388608
+        },
+        "scales_s": {
+          "shape": [
+            32,
+            4096
+          ],
+          "dtype": "torch.float16",
+          "bytes": 262144
+        },
+        "workspace": {
+          "shape": [
+            512
+          ],
+          "dtype": "torch.int32",
+          "bytes": 2048
+        }
+      },
+      "M": 1,
+      "correctness": {
+        "max_rel": 0.905741810798645,
+        "mean_rel": 0.0008598772110417485,
+        "rms_rel": 0.0003523367049638182,
+        "cos_sim": 1.0,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 8192,
+      "baseline_allocated_bytes": 50735104,
+      "latency_ms": {
+        "mean_ms": 0.03157311959192157,
+        "median_ms": 0.03174399957060814,
+        "min_ms": 0.030688000842928886,
+        "max_ms": 0.035840000957250595,
+        "p90_ms": 0.03174399957060814,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 8192,
+        "median_ms": 0.06143999844789505,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "groupsize": 128,
+      "weight_bytes_total": 8650752,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            256,
+            8192
+          ],
+          "dtype": "torch.int32",
+          "bytes": 8388608
+        },
+        "scales_s": {
+          "shape": [
+            32,
+            4096
+          ],
+          "dtype": "torch.float16",
+          "bytes": 262144
+        },
+        "workspace": {
+          "shape": [
+            512
+          ],
+          "dtype": "torch.int32",
+          "bytes": 2048
+        }
+      },
+      "M": 16,
+      "correctness": {
+        "max_rel": 21.840116500854492,
+        "mean_rel": 0.0019889227114617825,
+        "rms_rel": 0.0003502914623823017,
+        "cos_sim": 1.0000001192092896,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 131072,
+      "baseline_allocated_bytes": 50857984,
+      "latency_ms": {
+        "mean_ms": 0.03159647963941097,
+        "median_ms": 0.03174399957060814,
+        "min_ms": 0.030719999223947525,
+        "max_ms": 0.03670400008559227,
+        "p90_ms": 0.03248000144958496,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 131072,
+        "median_ms": 0.0655359998345375,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "groupsize": 128,
+      "weight_bytes_total": 8650752,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            256,
+            8192
+          ],
+          "dtype": "torch.int32",
+          "bytes": 8388608
+        },
+        "scales_s": {
+          "shape": [
+            32,
+            4096
+          ],
+          "dtype": "torch.float16",
+          "bytes": 262144
+        },
+        "workspace": {
+          "shape": [
+            512
+          ],
+          "dtype": "torch.int32",
+          "bytes": 2048
+        }
+      },
+      "M": 2048,
+      "correctness": {
+        "max_rel": 50.468040466308594,
+        "mean_rel": 0.00021393399219959974,
+        "rms_rel": 0.00015404685109388083,
+        "cos_sim": 1.0,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 16777216,
+      "baseline_allocated_bytes": 67504128,
+      "latency_ms": {
+        "mean_ms": 0.6810028898715973,
+        "median_ms": 0.6993920207023621,
+        "min_ms": 0.641215980052948,
+        "max_ms": 0.7024639844894409,
+        "p90_ms": 0.7004160284996033,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 16777216,
+        "median_ms": 0.7290880084037781,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "groupsize": 128,
+      "weight_bytes_total": 30277632,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            256,
+            28672
+          ],
+          "dtype": "torch.int32",
+          "bytes": 29360128
+        },
+        "scales_s": {
+          "shape": [
+            32,
+            14336
+          ],
+          "dtype": "torch.float16",
+          "bytes": 917504
+        },
+        "workspace": {
+          "shape": [
+            1792
+          ],
+          "dtype": "torch.int32",
+          "bytes": 7168
+        }
+      },
+      "M": 1,
+      "correctness": {
+        "max_rel": 1.9368126392364502,
+        "mean_rel": 0.0004579158849082887,
+        "rms_rel": 0.00023263960611075163,
+        "cos_sim": 0.9999999403953552,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 28672,
+      "baseline_allocated_bytes": 156253184,
+      "latency_ms": {
+        "mean_ms": 0.06147839926183224,
+        "median_ms": 0.06143999844789505,
+        "min_ms": 0.060416001826524734,
+        "max_ms": 0.07673600316047668,
+        "p90_ms": 0.062463998794555664,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 28672,
+        "median_ms": 0.22015999257564545,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "groupsize": 128,
+      "weight_bytes_total": 30277632,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            256,
+            28672
+          ],
+          "dtype": "torch.int32",
+          "bytes": 29360128
+        },
+        "scales_s": {
+          "shape": [
+            32,
+            14336
+          ],
+          "dtype": "torch.float16",
+          "bytes": 917504
+        },
+        "workspace": {
+          "shape": [
+            1792
+          ],
+          "dtype": "torch.int32",
+          "bytes": 7168
+        }
+      },
+      "M": 16,
+      "correctness": {
+        "max_rel": 7.332070350646973,
+        "mean_rel": 0.0003738436789717525,
+        "rms_rel": 0.00022950084530748427,
+        "cos_sim": 1.0,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 458752,
+      "baseline_allocated_bytes": 156376064,
+      "latency_ms": {
+        "mean_ms": 0.059815679602324964,
+        "median_ms": 0.06143999844789505,
+        "min_ms": 0.05632000043988228,
+        "max_ms": 0.0727040022611618,
+        "p90_ms": 0.062463998794555664,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 458752,
+        "median_ms": 0.2017280012369156,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "groupsize": 128,
+      "weight_bytes_total": 30277632,
+      "bpw": 4.125,
+      "artifacts": {
+        "packed_B": {
+          "shape": [
+            256,
+            28672
+          ],
+          "dtype": "torch.int32",
+          "bytes": 29360128
+        },
+        "scales_s": {
+          "shape": [
+            32,
+            14336
+          ],
+          "dtype": "torch.float16",
+          "bytes": 917504
+        },
+        "workspace": {
+          "shape": [
+            1792
+          ],
+          "dtype": "torch.int32",
+          "bytes": 7168
+        }
+      },
+      "M": 2048,
+      "correctness": {
+        "max_rel": 91.85284423828125,
+        "mean_rel": 8.025929855648428e-05,
+        "rms_rel": 9.054287511389703e-05,
+        "cos_sim": 1.0,
+        "pass": true,
+        "determinism_max_abs_diff": 0.0,
+        "determinism_reps": 5,
+        "gate": {
+          "rms_rel<": 0.005,
+          "cos_sim>": 0.9999,
+          "bitwise_deterministic": true
+        }
+      },
+      "peak_mem_delta_bytes": 58720256,
+      "baseline_allocated_bytes": 173022208,
+      "latency_ms": {
+        "mean_ms": 2.7265328049659727,
+        "median_ms": 2.726912021636963,
+        "min_ms": 2.685215950012207,
+        "max_ms": 2.7883520126342773,
+        "p90_ms": 2.751487970352173,
+        "iters": 100,
+        "warmup": 25
+      },
+      "fp16_context": {
+        "peak_mem_delta_bytes": 58720256,
+        "median_ms": 2.1227519512176514,
+        "note": "torch.matmul(A, dequantized fp16 W); context only, not the baseline"
+      }
+    }
+  ],
+  "markdown_table": "| shape KxN | M | weight bytes | bpw | peak delta (B) | marlin med ms | fp16 GEMM med ms | max rel | mean rel | rms rel | cos sim | bitwise det | gate |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n| 1024x1024 | 1 | 540672 | 4.1250 | 2048 | 0.0246 | 0.0278 | 0.0791 | 0.000918 | 5.07e-04 | 1.000000 | yes | PASS |\n| 1024x1024 | 16 | 540672 | 4.1250 | 32768 | 0.0246 | 0.0338 | 3.78 | 0.00163 | 4.85e-04 | 1.000000 | yes | PASS |\n| 1024x1024 | 2048 | 540672 | 4.1250 | 4194304 | 0.0717 | 0.0471 | 33.7 | 0.000674 | 2.66e-04 | 1.000000 | yes | PASS |\n| 2048x2048 | 1 | 2162688 | 4.1250 | 4096 | 0.0225 | 0.0338 | 1.3 | 0.00157 | 3.66e-04 | 1.000000 | yes | PASS |\n| 2048x2048 | 16 | 2162688 | 4.1250 | 65536 | 0.0228 | 0.0348 | 3.88 | 0.0011 | 3.69e-04 | 1.000000 | yes | PASS |\n| 2048x2048 | 2048 | 2162688 | 4.1250 | 8388608 | 0.1997 | 0.1874 | 159 | 0.000412 | 2.06e-04 | 1.000000 | yes | PASS |\n| 4096x4096 | 1 | 8650752 | 4.1250 | 8192 | 0.0317 | 0.0614 | 0.906 | 0.00086 | 3.52e-04 | 1.000000 | yes | PASS |\n| 4096x4096 | 16 | 8650752 | 4.1250 | 131072 | 0.0317 | 0.0655 | 21.8 | 0.00199 | 3.50e-04 | 1.000000 | yes | PASS |\n| 4096x4096 | 2048 | 8650752 | 4.1250 | 16777216 | 0.6994 | 0.7291 | 50.5 | 0.000214 | 1.54e-04 | 1.000000 | yes | PASS |\n| 4096x14336 | 1 | 30277632 | 4.1250 | 28672 | 0.0614 | 0.2202 | 1.94 | 0.000458 | 2.33e-04 | 1.000000 | yes | PASS |\n| 4096x14336 | 16 | 30277632 | 4.1250 | 458752 | 0.0614 | 0.2017 | 7.33 | 0.000374 | 2.30e-04 | 1.000000 | yes | PASS |\n| 4096x14336 | 2048 | 30277632 | 4.1250 | 58720256 | 2.7269 | 2.1228 | 91.9 | 8.03e-05 | 9.05e-05 | 1.000000 | yes | PASS |"
+}

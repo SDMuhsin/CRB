@@ -1,0 +1,829 @@
+{
+  "meta": {
+    "kernel": "DPK W2A4 bucket-popcount GEMV v1 (kernels/cuda/dpk_gemv.cu)",
+    "format": "DPK element mmode: b0/b1/m planes + s bitmap + bf16 cb[R,NG,3,4]",
+    "activations": "A4 excess-8 nibbles, per-tensor fp32 scale (doc 02 par.4)",
+    "M": 1,
+    "gpu": "NVIDIA A40",
+    "compute_capability": "8.6",
+    "torch": "2.5.1+cu124",
+    "cuda_runtime": "12.4",
+    "seed": 0,
+    "timestamp_utc": "2026-07-06T01:15:43.275281+00:00",
+    "measurement_contract": "kernels/bench/bench_utils.py",
+    "comparator": "Marlin FP16xINT4 sym g=128 (patched), M=1 records from results_int4_baseline.json",
+    "req1_rule": "packed weight bytes < Marlin weight bytes for g >= 256; g=128 expected-fail (Finding K0-1, S-A bootstrap config)"
+  },
+  "records": [
+    {
+      "K": 1024,
+      "N": 1024,
+      "g": 128,
+      "g_spec": "128",
+      "M": 1,
+      "NG": 8,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            1024,
+            32
+          ],
+          "dtype": "uint32",
+          "bytes_each": 131072
+        },
+        "s": {
+          "shape": [
+            32
+          ],
+          "dtype": "uint32",
+          "bytes": 128
+        },
+        "cb": {
+          "shape": [
+            1024,
+            8,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 196608
+        }
+      },
+      "weight_bytes_total": 589952,
+      "bpw": 4.5009765625,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 1.4583564578174446e-08,
+        "f32_cos_sim": 1.0,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 2048,
+      "expected_peak_bytes": 2048,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 590848,
+      "latency_ms": {
+        "mean_ms": 0.020767039712518455,
+        "median_ms": 0.020479999482631683,
+        "min_ms": 0.01945599913597107,
+        "max_ms": 0.03174399957060814,
+        "p90_ms": 0.022336000576615334,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 540672,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 2048,
+        "median_ms": 0.02457600086927414
+      },
+      "weight_bytes_vs_marlin": 1.0911458333333333,
+      "latency_vs_marlin": 0.8333332828058517,
+      "req1_verdict": "expected-fail (K0-1)"
+    },
+    {
+      "K": 1024,
+      "N": 1024,
+      "g": 512,
+      "g_spec": "512",
+      "M": 1,
+      "NG": 2,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            1024,
+            32
+          ],
+          "dtype": "uint32",
+          "bytes_each": 131072
+        },
+        "s": {
+          "shape": [
+            32
+          ],
+          "dtype": "uint32",
+          "bytes": 128
+        },
+        "cb": {
+          "shape": [
+            1024,
+            2,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 49152
+        }
+      },
+      "weight_bytes_total": 442496,
+      "bpw": 3.3759765625,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 9.690629632075343e-09,
+        "f32_cos_sim": 1.0000001192092896,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 2048,
+      "expected_peak_bytes": 2048,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 445440,
+      "latency_ms": {
+        "mean_ms": 0.01989343961700797,
+        "median_ms": 0.01945599913597107,
+        "min_ms": 0.01849599927663803,
+        "max_ms": 0.028672000393271446,
+        "p90_ms": 0.020479999482631683,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 540672,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 2048,
+        "median_ms": 0.02457600086927414
+      },
+      "weight_bytes_vs_marlin": 0.8184185606060606,
+      "latency_vs_marlin": 0.7916666035073147,
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 1024,
+      "N": 1024,
+      "g": 1024,
+      "g_spec": "C",
+      "M": 1,
+      "NG": 1,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            1024,
+            32
+          ],
+          "dtype": "uint32",
+          "bytes_each": 131072
+        },
+        "s": {
+          "shape": [
+            32
+          ],
+          "dtype": "uint32",
+          "bytes": 128
+        },
+        "cb": {
+          "shape": [
+            1024,
+            1,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 24576
+        }
+      },
+      "weight_bytes_total": 417920,
+      "bpw": 3.1884765625,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 5.603675301557587e-09,
+        "f32_cos_sim": 1.0,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 2048,
+      "expected_peak_bytes": 2048,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 420864,
+      "latency_ms": {
+        "mean_ms": 0.02002591958269477,
+        "median_ms": 0.01958400011062622,
+        "min_ms": 0.018432000651955605,
+        "max_ms": 0.02879999950528145,
+        "p90_ms": 0.020479999482631683,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 540672,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 2048,
+        "median_ms": 0.02457600086927414
+      },
+      "weight_bytes_vs_marlin": 0.7729640151515151,
+      "latency_vs_marlin": 0.796874976315243,
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 2048,
+      "N": 2048,
+      "g": 128,
+      "g_spec": "128",
+      "M": 1,
+      "NG": 16,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            2048,
+            64
+          ],
+          "dtype": "uint32",
+          "bytes_each": 524288
+        },
+        "s": {
+          "shape": [
+            64
+          ],
+          "dtype": "uint32",
+          "bytes": 256
+        },
+        "cb": {
+          "shape": [
+            2048,
+            16,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 786432
+        }
+      },
+      "weight_bytes_total": 2359552,
+      "bpw": 4.50048828125,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 3.001552073556013e-08,
+        "f32_cos_sim": 1.0,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 4096,
+      "expected_peak_bytes": 4096,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 2362880,
+      "latency_ms": {
+        "mean_ms": 0.019997759498655798,
+        "median_ms": 0.01945599913597107,
+        "min_ms": 0.018432000651955605,
+        "max_ms": 0.03379200026392937,
+        "p90_ms": 0.020479999482631683,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 2162688,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 4096,
+        "median_ms": 0.02252800017595291
+      },
+      "weight_bytes_vs_marlin": 1.0910274621212122,
+      "latency_vs_marlin": 0.8636363185374532,
+      "req1_verdict": "expected-fail (K0-1)"
+    },
+    {
+      "K": 2048,
+      "N": 2048,
+      "g": 512,
+      "g_spec": "512",
+      "M": 1,
+      "NG": 4,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            2048,
+            64
+          ],
+          "dtype": "uint32",
+          "bytes_each": 524288
+        },
+        "s": {
+          "shape": [
+            64
+          ],
+          "dtype": "uint32",
+          "bytes": 256
+        },
+        "cb": {
+          "shape": [
+            2048,
+            4,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 196608
+        }
+      },
+      "weight_bytes_total": 1769728,
+      "bpw": 3.37548828125,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 1.2686745876067107e-08,
+        "f32_cos_sim": 0.9999998807907104,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 4096,
+      "expected_peak_bytes": 4096,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 1775104,
+      "latency_ms": {
+        "mean_ms": 0.020052479524165393,
+        "median_ms": 0.01945599913597107,
+        "min_ms": 0.018592000007629395,
+        "max_ms": 0.028672000393271446,
+        "p90_ms": 0.020479999482631683,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 2162688,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 4096,
+        "median_ms": 0.02252800017595291
+      },
+      "weight_bytes_vs_marlin": 0.8183001893939394,
+      "latency_vs_marlin": 0.8636363185374532,
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 2048,
+      "N": 2048,
+      "g": 2048,
+      "g_spec": "C",
+      "M": 1,
+      "NG": 1,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            2048,
+            64
+          ],
+          "dtype": "uint32",
+          "bytes_each": 524288
+        },
+        "s": {
+          "shape": [
+            64
+          ],
+          "dtype": "uint32",
+          "bytes": 256
+        },
+        "cb": {
+          "shape": [
+            2048,
+            1,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 49152
+        }
+      },
+      "weight_bytes_total": 1622272,
+      "bpw": 3.09423828125,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 6.37152064442148e-09,
+        "f32_cos_sim": 1.0,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 4096,
+      "expected_peak_bytes": 4096,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 1627648,
+      "latency_ms": {
+        "mean_ms": 0.019544959869235753,
+        "median_ms": 0.01943999994546175,
+        "min_ms": 0.018432000651955605,
+        "max_ms": 0.030719999223947525,
+        "p90_ms": 0.020479999482631683,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 2162688,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 4096,
+        "median_ms": 0.02252800017595291
+      },
+      "weight_bytes_vs_marlin": 0.7501183712121212,
+      "latency_vs_marlin": 0.8629261272029202,
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 128,
+      "g_spec": "128",
+      "M": 1,
+      "NG": 32,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            4096,
+            128
+          ],
+          "dtype": "uint32",
+          "bytes_each": 2097152
+        },
+        "s": {
+          "shape": [
+            128
+          ],
+          "dtype": "uint32",
+          "bytes": 512
+        },
+        "cb": {
+          "shape": [
+            4096,
+            32,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 3145728
+        }
+      },
+      "weight_bytes_total": 9437696,
+      "bpw": 4.500244140625,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 4.3365936619466083e-08,
+        "f32_cos_sim": 1.0,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 8192,
+      "expected_peak_bytes": 8192,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 9443840,
+      "latency_ms": {
+        "mean_ms": 0.028446400165557863,
+        "median_ms": 0.027759999968111515,
+        "min_ms": 0.026815999299287796,
+        "max_ms": 0.03788800165057182,
+        "p90_ms": 0.028672000393271446,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 8192,
+        "median_ms": 0.03174399957060814
+      },
+      "weight_bytes_vs_marlin": 1.0909682765151516,
+      "latency_vs_marlin": 0.8744959785664368,
+      "req1_verdict": "expected-fail (K0-1)"
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 512,
+      "g_spec": "512",
+      "M": 1,
+      "NG": 8,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            4096,
+            128
+          ],
+          "dtype": "uint32",
+          "bytes_each": 2097152
+        },
+        "s": {
+          "shape": [
+            128
+          ],
+          "dtype": "uint32",
+          "bytes": 512
+        },
+        "cb": {
+          "shape": [
+            4096,
+            8,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 786432
+        }
+      },
+      "weight_bytes_total": 7078400,
+      "bpw": 3.375244140625,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 2.412541810770108e-08,
+        "f32_cos_sim": 1.0000001192092896,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 8192,
+      "expected_peak_bytes": 8192,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 7088640,
+      "latency_ms": {
+        "mean_ms": 0.028440960180014373,
+        "median_ms": 0.028672000393271446,
+        "min_ms": 0.026623999699950218,
+        "max_ms": 0.03574400022625923,
+        "p90_ms": 0.02969600073993206,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 8192,
+        "median_ms": 0.03174399957060814
+      },
+      "weight_bytes_vs_marlin": 0.8182410037878788,
+      "latency_vs_marlin": 0.9032258310581296,
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 4096,
+      "g_spec": "C",
+      "M": 1,
+      "NG": 1,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            4096,
+            128
+          ],
+          "dtype": "uint32",
+          "bytes_each": 2097152
+        },
+        "s": {
+          "shape": [
+            128
+          ],
+          "dtype": "uint32",
+          "bytes": 512
+        },
+        "cb": {
+          "shape": [
+            4096,
+            1,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 98304
+        }
+      },
+      "weight_bytes_total": 6390272,
+      "bpw": 3.047119140625,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 7.490340792060124e-09,
+        "f32_cos_sim": 0.9999999403953552,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 8192,
+      "expected_peak_bytes": 8192,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 6400512,
+      "latency_ms": {
+        "mean_ms": 0.028102400097995996,
+        "median_ms": 0.027648000046610832,
+        "min_ms": 0.026623999699950218,
+        "max_ms": 0.03891199827194214,
+        "p90_ms": 0.028672000393271446,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 8192,
+        "median_ms": 0.03174399957060814
+      },
+      "weight_bytes_vs_marlin": 0.7386955492424242,
+      "latency_vs_marlin": 0.8709677551851467,
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 128,
+      "g_spec": "128",
+      "M": 1,
+      "NG": 32,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            14336,
+            128
+          ],
+          "dtype": "uint32",
+          "bytes_each": 7340032
+        },
+        "s": {
+          "shape": [
+            128
+          ],
+          "dtype": "uint32",
+          "bytes": 512
+        },
+        "cb": {
+          "shape": [
+            14336,
+            32,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 11010048
+        }
+      },
+      "weight_bytes_total": 33030656,
+      "bpw": 4.500069754464286,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 4.4265444643087903e-08,
+        "f32_cos_sim": 1.0,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 28672,
+      "expected_peak_bytes": 28672,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 33040896,
+      "latency_ms": {
+        "mean_ms": 0.0729238422960043,
+        "median_ms": 0.0727040022611618,
+        "min_ms": 0.07168000191450119,
+        "max_ms": 0.08908800035715103,
+        "p90_ms": 0.07372800260782242,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 28672,
+        "median_ms": 0.06143999844789505
+      },
+      "weight_bytes_vs_marlin": 1.090926001082251,
+      "latency_vs_marlin": 1.1833334000296132,
+      "req1_verdict": "expected-fail (K0-1)"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 512,
+      "g_spec": "512",
+      "M": 1,
+      "NG": 8,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            14336,
+            128
+          ],
+          "dtype": "uint32",
+          "bytes_each": 7340032
+        },
+        "s": {
+          "shape": [
+            128
+          ],
+          "dtype": "uint32",
+          "bytes": 512
+        },
+        "cb": {
+          "shape": [
+            14336,
+            8,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 2752512
+        }
+      },
+      "weight_bytes_total": 24773120,
+      "bpw": 3.3750697544642856,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 2.4796669606530486e-08,
+        "f32_cos_sim": 1.0,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 28672,
+      "expected_peak_bytes": 28672,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 24803840,
+      "latency_ms": {
+        "mean_ms": 0.0652489598095417,
+        "median_ms": 0.0655359998345375,
+        "min_ms": 0.06451199948787689,
+        "max_ms": 0.07475200295448303,
+        "p90_ms": 0.0655359998345375,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 28672,
+        "median_ms": 0.06143999844789505
+      },
+      "weight_bytes_vs_marlin": 0.8181987283549783,
+      "latency_vs_marlin": 1.0666666909198592,
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 4096,
+      "g_spec": "C",
+      "M": 1,
+      "NG": 1,
+      "artifacts": {
+        "b0/b1/m": {
+          "shape": [
+            14336,
+            128
+          ],
+          "dtype": "uint32",
+          "bytes_each": 7340032
+        },
+        "s": {
+          "shape": [
+            128
+          ],
+          "dtype": "uint32",
+          "bytes": 512
+        },
+        "cb": {
+          "shape": [
+            14336,
+            1,
+            3,
+            4
+          ],
+          "dtype": "bfloat16",
+          "bytes": 344064
+        }
+      },
+      "weight_bytes_total": 22364672,
+      "bpw": 3.0469447544642856,
+      "correctness": {
+        "int_SN_exact": true,
+        "f32_rms_rel": 1.1436699587363819e-08,
+        "f32_cos_sim": 1.0,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 28672,
+      "expected_peak_bytes": 28672,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 22395392,
+      "latency_ms": {
+        "mean_ms": 0.06099040023982525,
+        "median_ms": 0.060416001826524734,
+        "min_ms": 0.060416001826524734,
+        "max_ms": 0.07065600156784058,
+        "p90_ms": 0.06143999844789505,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin_m1": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 28672,
+        "median_ms": 0.06143999844789505
+      },
+      "weight_bytes_vs_marlin": 0.7386532738095238,
+      "latency_vs_marlin": 0.9833333879030168,
+      "req1_verdict": "PASS"
+    }
+  ],
+  "summary": {
+    "all_correctness_certified": true,
+    "req1_all_g_ge_256_pass": true,
+    "g128_expected_fail_note": "g=128 (S-A artifacts) bpw 4.5 > 4.125: Finding K0-1, by design; bootstrap config only"
+  },
+  "markdown_table": "| shape KxN | g | bpw | weight bytes | marlin bytes | ratio | peak delta (B) | marlin peak (B) | dpk med ms | marlin med ms | lat ratio | correctness | Req-1 |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n| 1024x1024 | 128 | 4.5010 | 589952 | 540672 | 1.091 | 2048 | 2048 | 0.0205 | 0.0246 | 0.83x | PASS | expected-fail (K0-1) |\n| 1024x1024 | 512 | 3.3760 | 442496 | 540672 | 0.818 | 2048 | 2048 | 0.0195 | 0.0246 | 0.79x | PASS | PASS |\n| 1024x1024 | 1024 | 3.1885 | 417920 | 540672 | 0.773 | 2048 | 2048 | 0.0196 | 0.0246 | 0.80x | PASS | PASS |\n| 2048x2048 | 128 | 4.5005 | 2359552 | 2162688 | 1.091 | 4096 | 4096 | 0.0195 | 0.0225 | 0.86x | PASS | expected-fail (K0-1) |\n| 2048x2048 | 512 | 3.3755 | 1769728 | 2162688 | 0.818 | 4096 | 4096 | 0.0195 | 0.0225 | 0.86x | PASS | PASS |\n| 2048x2048 | 2048 | 3.0942 | 1622272 | 2162688 | 0.750 | 4096 | 4096 | 0.0194 | 0.0225 | 0.86x | PASS | PASS |\n| 4096x4096 | 128 | 4.5002 | 9437696 | 8650752 | 1.091 | 8192 | 8192 | 0.0278 | 0.0317 | 0.87x | PASS | expected-fail (K0-1) |\n| 4096x4096 | 512 | 3.3752 | 7078400 | 8650752 | 0.818 | 8192 | 8192 | 0.0287 | 0.0317 | 0.90x | PASS | PASS |\n| 4096x4096 | 4096 | 3.0471 | 6390272 | 8650752 | 0.739 | 8192 | 8192 | 0.0276 | 0.0317 | 0.87x | PASS | PASS |\n| 4096x14336 | 128 | 4.5001 | 33030656 | 30277632 | 1.091 | 28672 | 28672 | 0.0727 | 0.0614 | 1.18x | PASS | expected-fail (K0-1) |\n| 4096x14336 | 512 | 3.3751 | 24773120 | 30277632 | 0.818 | 28672 | 28672 | 0.0655 | 0.0614 | 1.07x | PASS | PASS |\n| 4096x14336 | 4096 | 3.0469 | 22364672 | 30277632 | 0.739 | 28672 | 28672 | 0.0604 | 0.0614 | 0.98x | PASS | PASS |"
+}

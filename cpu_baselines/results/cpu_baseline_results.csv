@@ -1,0 +1,160 @@
+timestamp,framework,commit,model,quant,threads,numa,pp512_tps,tg128_tps,file_size_bytes,bpw,ppl_wt2_c2048,ppl_fp16_anchor,tool,notes
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,F16,24,none,,,1509347136,16.0,18.4881,18.4881,llama-perplexity,wt2-raw full test; ctx2048; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,F16,1,none,48.47,9.76,1509347136,16.0,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,F16,6,none,257.18,31.1,1509347136,16.0,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,F16,12,none,434.91,37.88,1509347136,16.0,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,F16,24,none,764.92,39.07,1509347136,16.0,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,F16,48,none,142.15,0.5,1509347136,16.0,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,F16,12,node0-cpubind,511.81,45.86,1509347136,16.0,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_K_M,24,none,,,484219712,5.09,20.0231,18.4881,llama-perplexity,wt2-raw full test; ctx2048; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_K_M,1,none,80.26,21.3,484219712,5.09,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_K_M,6,none,409.57,68.49,484219712,5.09,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_K_M,12,none,706.27,91.87,484219712,5.09,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_K_M,24,none,936.5,100.82,484219712,5.09,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_K_M,48,none,209.14,0.44,484219712,5.09,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_K_M,12,node0-cpubind,765.22,90.13,484219712,5.09,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_0,24,none,,,469080896,4.93,20.9906,18.4881,llama-perplexity,wt2-raw full test; ctx2048; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_0,1,none,83.83,21.96,469080896,4.93,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_0,6,none,434.17,73.13,469080896,4.93,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_0,12,none,755.09,94.92,469080896,4.93,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_0,24,none,1012.0,88.34,469080896,4.93,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_0,48,none,187.58,0.47,469080896,4.93,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q4_0,12,node0-cpubind,793.24,97.31,469080896,4.93,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); no-imatrix
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q3_K_M,24,none,,,413978752,4.34,21.7654,18.4881,llama-perplexity,wt2-raw full test; ctx2048; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q3_K_M,1,none,41.34,18.41,413978752,4.34,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q3_K_M,6,none,223.74,70.0,413978752,4.34,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q3_K_M,12,none,418.33,92.45,413978752,4.34,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q3_K_M,24,none,610.62,99.75,413978752,4.34,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q3_K_M,48,none,185.52,0.81,413978752,4.34,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q3_K_M,12,node0-cpubind,416.79,84.15,413978752,4.34,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q2_K,24,none,,,347288704,3.63,37.472,18.4881,llama-perplexity,wt2-raw full test; ctx2048; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q2_K,1,none,48.34,20.66,347288704,3.63,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q2_K,6,none,262.54,72.05,347288704,3.63,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q2_K,12,none,499.45,103.11,347288704,3.63,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q2_K,24,none,697.23,112.24,347288704,3.63,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q2_K,48,none,204.9,0.6,347288704,3.63,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,Q2_K,12,node0-cpubind,508.99,117.83,347288704,3.63,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_M,24,none,,,331760768,3.47,53.1124,18.4881,llama-perplexity,wt2-raw full test; ctx2048; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_M,1,none,16.69,12.11,331760768,3.47,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_M,6,none,93.84,55.86,331760768,3.47,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_M,12,none,183.78,81.41,331760768,3.47,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_M,24,none,248.75,88.73,331760768,3.47,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_M,48,none,144.56,0.45,331760768,3.47,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_M,12,node0-cpubind,187.74,86.11,331760768,3.47,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XS,24,none,,,293046400,3.06,249.9168,18.4881,llama-perplexity,wt2-raw full test; ctx2048; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XS,1,none,18.92,13.07,293046400,3.06,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XS,6,none,108.0,58.97,293046400,3.06,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XS,12,none,210.32,90.5,293046400,3.06,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XS,24,none,372.22,107.73,293046400,3.06,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XS,48,none,164.97,82.33,293046400,3.06,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XS,12,node0-cpubind,218.76,94.79,293046400,3.06,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XXS,24,none,,,280496256,2.92,1298.6393,18.4881,llama-perplexity,wt2-raw full test; ctx2048; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XXS,1,none,19.76,13.43,280496256,2.92,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XXS,6,none,113.91,61.2,280496256,2.92,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XXS,12,none,222.06,94.72,280496256,2.92,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XXS,24,none,416.27,119.79,280496256,2.92,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XXS,48,none,358.32,108.79,280496256,2.92,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ2_XXS,12,node0-cpubind,224.88,105.51,280496256,2.92,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ1_S,24,none,,,259065984,2.69,15737.8044,18.4881,llama-perplexity,wt2-raw full test; ctx2048; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ1_S,1,none,20.79,14.51,259065984,2.69,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ1_S,6,none,118.86,65.27,259065984,2.69,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ1_S,12,none,232.16,101.29,259065984,2.69,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ1_S,24,none,435.34,136.38,259065984,2.69,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ1_S,48,none,371.53,125.45,259065984,2.69,,,llama-bench,p512 n128 r3; imatrix(wt2-train-100k)
+2026-07-14T07:38:52Z,llama.cpp,2969d6d15d67a08e7b83f26164b15350c79c5248,Qwen3-0.6B,IQ1_S,12,node0-cpubind,234.38,99.44,259065984,2.69,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(wt2-train-100k)
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,F16,24,none,,,1509347136,16.001,18.4883,18.4883,llama-perplexity,wt2-raw full test; ctx2048; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,F16,1,none,85.08,7.91,1509347136,16.001,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,F16,6,none,481.13,34.63,1509347136,16.001,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,F16,12,none,863.67,44.23,1509347136,16.001,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,F16,24,none,950.61,42.07,1509347136,16.001,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,F16,48,none,1369.56,39.08,1509347136,16.001,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,F16,12,node0-cpubind,895.08,47.89,1509347136,16.001,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,F16,24,none,1494.13,54.52,1509347136,16.001,,,llama-bench,rtr; p512 n128 r3; -rtr 1 run-time repack; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_K_M,24,none,,,484219712,5.09,20.387,18.4883,llama-perplexity,wt2-raw full test; ctx2048; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_K_M,1,none,125.23,20.11,484219712,5.09,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_K_M,6,none,671.64,65.54,484219712,5.09,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_K_M,12,none,1197.22,89.16,484219712,5.09,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_K_M,24,none,1275.06,107.21,484219712,5.09,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_K_M,48,none,1257.5,91.79,484219712,5.09,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_K_M,12,node0-cpubind,1231.74,105.12,484219712,5.09,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_K_M,24,none,1715.01,129.2,484219712,5.09,,,llama-bench,rtr; p512 n128 r3; -rtr 1 run-time repack; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_0,24,none,,,469080896,4.929,20.9433,18.4883,llama-perplexity,wt2-raw full test; ctx2048; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_0,1,none,125.18,10.65,469080896,4.929,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_0,6,none,645.37,48.55,469080896,4.929,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_0,12,none,1162.91,78.48,469080896,4.929,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_0,24,none,1291.37,106.13,469080896,4.929,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_0,48,none,1332.31,96.47,469080896,4.929,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_0,12,node0-cpubind,1231.12,88.93,469080896,4.929,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q4_0,24,none,2089.05,131.8,469080896,4.929,,,llama-bench,rtr; p512 n128 r3; -rtr 1 run-time repack; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ4_KS,24,none,,,458375488,4.815,21.7157,18.4883,llama-perplexity,wt2-raw full test; ctx2048; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ4_KS,1,none,149.77,21.74,458375488,4.815,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ4_KS,6,none,799.26,70.94,458375488,4.815,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ4_KS,12,none,1445.03,98.84,458375488,4.815,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ4_KS,24,none,1485.04,112.18,458375488,4.815,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ4_KS,48,none,1898.77,103.42,458375488,4.815,,,llama-bench,p512 n128 r3; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ4_KS,12,node0-cpubind,1485.8,114.7,458375488,4.815,,,llama-bench,p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ4_KS,24,none,1648.43,129.58,458375488,4.815,,,llama-bench,rtr; p512 n128 r3; -rtr 1 run-time repack; no-imatrix
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ3_K,24,none,,,373163136,3.908,22.9197,18.4883,llama-perplexity,"wt2-raw full test; ctx2048; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ3_K,1,none,148.01,19.06,373163136,3.908,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ3_K,6,none,799.1,76.39,373163136,3.908,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ3_K,12,none,1438.77,103.03,373163136,3.908,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ3_K,24,none,1477.33,124.12,373163136,3.908,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ3_K,48,none,1805.15,116.63,373163136,3.908,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ3_K,12,node0-cpubind,1486.16,126.46,373163136,3.908,,,llama-bench,"p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ3_K,24,none,1669.72,147.11,373163136,3.908,,,llama-bench,"rtr; p512 n128 r3; -rtr 1 run-time repack; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q2_K,24,none,,,347288704,3.633,38.0581,18.4883,llama-perplexity,"wt2-raw full test; ctx2048; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q2_K,1,none,148.33,23.25,347288704,3.633,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q2_K,6,none,796.32,87.34,347288704,3.633,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q2_K,12,none,1433.94,115.85,347288704,3.633,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q2_K,24,none,1463.55,133.18,347288704,3.633,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q2_K,48,none,1924.74,116.89,347288704,3.633,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q2_K,12,node0-cpubind,1482.34,139.34,347288704,3.633,,,llama-bench,"p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,Q2_K,24,none,1683.49,159.58,347288704,3.633,,,llama-bench,"rtr; p512 n128 r3; -rtr 1 run-time repack; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KL,24,none,,,320173952,3.344,33.503,18.4883,llama-perplexity,"wt2-raw full test; ctx2048; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KL,1,none,149.56,19.78,320173952,3.344,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KL,6,none,802.98,82.34,320173952,3.344,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KL,12,none,1443.09,113.84,320173952,3.344,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KL,24,none,1445.61,131.14,320173952,3.344,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KL,48,none,1587.52,109.16,320173952,3.344,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KL,12,node0-cpubind,1441.1,132.92,320173952,3.344,,,llama-bench,"p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KL,24,none,2355.05,135.99,320173952,3.344,,,llama-bench,"rtr; p512 n128 r3; -rtr 1 run-time repack; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_K,24,none,,,305707136,3.19,40.9899,18.4883,llama-perplexity,"wt2-raw full test; ctx2048; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_K,1,none,148.91,22.74,305707136,3.19,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_K,6,none,805.99,91.98,305707136,3.19,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_K,12,none,1445.61,113.67,305707136,3.19,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_K,24,none,1458.38,143.31,305707136,3.19,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_K,48,none,1677.78,135.04,305707136,3.19,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_K,12,node0-cpubind,1491.28,143.25,305707136,3.19,,,llama-bench,"p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_K,24,none,1664.7,159.39,305707136,3.19,,,llama-bench,"rtr; p512 n128 r3; -rtr 1 run-time repack; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XS,24,none,,,296028288,3.087,93.4373,18.4883,llama-perplexity,"wt2-raw full test; ctx2048; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XS,1,none,148.78,13.96,296028288,3.087,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XS,6,none,803.68,62.13,296028288,3.087,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XS,12,none,1444.73,83.06,296028288,3.087,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XS,24,none,1461.91,105.0,296028288,3.087,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XS,48,none,1608.82,114.27,296028288,3.087,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XS,12,node0-cpubind,1482.94,107.72,296028288,3.087,,,llama-bench,"p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XS,24,none,1262.9,126.26,296028288,3.087,,,llama-bench,"rtr; p512 n128 r3; -rtr 1 run-time repack; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KS,24,none,,,282173312,2.94,120.091,18.4883,llama-perplexity,"wt2-raw full test; ctx2048; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KS,1,none,149.49,21.39,282173312,2.94,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KS,6,none,802.95,90.46,282173312,2.94,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KS,12,none,1446.51,116.79,282173312,2.94,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KS,24,none,1468.0,139.46,282173312,2.94,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KS,48,none,1926.91,133.88,282173312,2.94,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KS,12,node0-cpubind,1495.76,153.14,282173312,2.94,,,llama-bench,"p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KS,24,none,2120.9,152.69,282173312,2.94,,,llama-bench,"rtr; p512 n128 r3; -rtr 1 run-time repack; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KT,24,none,,,289226368,3.015,44.1864,18.4883,llama-perplexity,"wt2-raw full test; ctx2048; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KT,1,none,128.01,10.92,289226368,3.015,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KT,6,none,671.71,49.48,289226368,3.015,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KT,12,none,1204.31,67.27,289226368,3.015,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KT,24,none,1321.87,94.28,289226368,3.015,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KT,48,none,561.38,93.73,289226368,3.015,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KT,12,node0-cpubind,1252.51,93.32,289226368,3.015,,,llama-bench,"p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_KT,24,none,1845.19,114.83,289226368,3.015,,,llama-bench,"rtr; p512 n128 r3; -rtr 1 run-time repack; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XXS,24,none,,,283478144,2.954,458.6636,18.4883,llama-perplexity,"wt2-raw full test; ctx2048; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XXS,1,none,149.17,12.26,283478144,2.954,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XXS,6,none,804.67,59.12,283478144,2.954,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XXS,12,none,1441.71,79.57,283478144,2.954,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XXS,24,none,1474.46,103.97,283478144,2.954,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XXS,48,none,1519.53,109.49,283478144,2.954,,,llama-bench,"p512 n128 r3; imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XXS,12,node0-cpubind,1495.75,93.12,283478144,2.954,,,llama-bench,"p512 n128 r3; numactl --cpunodebind=0 (membind EPERM in container); imatrix(ik,wt2-train-100k)"
+2026-07-14T13:44:14Z,ik_llama.cpp,7937465ff15a2e121f36b87d4507766bd11f5153,Qwen3-0.6B,IQ2_XXS,24,none,1218.33,146.89,283478144,2.954,,,llama-bench,"rtr; p512 n128 r3; -rtr 1 run-time repack; imatrix(ik,wt2-train-100k)"

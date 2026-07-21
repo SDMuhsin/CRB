@@ -1,0 +1,746 @@
+{
+  "meta": {
+    "kernel": "DPK W2A4 tensor-core GEMM v1 (kernels/cuda/dpk_gemm.cu)",
+    "format": "DPK element mmode: b0/b1/m planes + s bitmap + bf16 cb[R,NG,3,4]",
+    "activations": "A4 excess-8 nibbles [M, C/8], per-token fp32 scales [M]",
+    "gpu": "NVIDIA A40",
+    "compute_capability": "8.6",
+    "torch": "2.5.1+cu124",
+    "cuda_runtime": "12.4",
+    "seed": 0,
+    "timestamp_utc": "2026-07-06T03:54:51.578850+00:00",
+    "measurement_contract": "kernels/bench/bench_utils.py",
+    "comparator": "Marlin FP16xINT4 sym g=128 (patched) RE-RUN at the same M in this script (recipe of bench_int4_baseline.py)",
+    "req1_rule": "weight bytes < Marlin AND peak delta <= Marlin peak (outputs both M*N*2 B); activation-side 4x saving reported"
+  },
+  "records": [
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 512,
+      "g_spec": "512",
+      "M": 2,
+      "weight_bytes_total": 7078400,
+      "bpw": 3.375244140625,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 8.588611596511506e-08,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 16384,
+      "expected_peak_bytes": 16384,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 15604736,
+      "latency_ms": {
+        "mean_ms": 0.06985888123512268,
+        "median_ms": 0.06963200122117996,
+        "min_ms": 0.06860800087451935,
+        "max_ms": 0.08908800035715103,
+        "p90_ms": 0.07065600156784058,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 16384,
+        "median_ms": 0.026623999699950218,
+        "min_ms": 0.025599999353289604,
+        "act_bytes_fp16": 16384
+      },
+      "weight_bytes_vs_marlin": 0.8182410037878788,
+      "latency_vs_marlin": 2.615384690727373,
+      "activation_bytes": {
+        "ours_a4": 4096,
+        "marlin_fp16": 16384,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 512,
+      "g_spec": "512",
+      "M": 16,
+      "weight_bytes_total": 7078400,
+      "bpw": 3.375244140625,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 8.539518410122364e-08,
+        "bf16_mismatch_frac": 3.0517578125e-05,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 131072,
+      "expected_peak_bytes": 131072,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 15649792,
+      "latency_ms": {
+        "mean_ms": 0.0717097619175911,
+        "median_ms": 0.07168000191450119,
+        "min_ms": 0.07065600156784058,
+        "max_ms": 0.08908800035715103,
+        "p90_ms": 0.07187200337648392,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 131072,
+        "median_ms": 0.0315839983522892,
+        "min_ms": 0.02969600073993206,
+        "act_bytes_fp16": 131072
+      },
+      "weight_bytes_vs_marlin": 0.8182410037878788,
+      "latency_vs_marlin": 2.26950372511357,
+      "activation_bytes": {
+        "ours_a4": 32768,
+        "marlin_fp16": 131072,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 512,
+      "g_spec": "512",
+      "M": 128,
+      "weight_bytes_total": 7078400,
+      "bpw": 3.375244140625,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 2.7801368056953044e-07,
+        "bf16_mismatch_frac": 4.76837158203125e-05,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 1048576,
+      "expected_peak_bytes": 1048576,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 15993856,
+      "latency_ms": {
+        "mean_ms": 0.17319136291742324,
+        "median_ms": 0.1730560064315796,
+        "min_ms": 0.17203199863433838,
+        "max_ms": 0.18943999707698822,
+        "p90_ms": 0.1740799993276596,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 1048576,
+        "median_ms": 0.05734400078654289,
+        "min_ms": 0.05632000043988228,
+        "act_bytes_fp16": 1048576
+      },
+      "weight_bytes_vs_marlin": 0.8182410037878788,
+      "latency_vs_marlin": 3.017857213621398,
+      "activation_bytes": {
+        "ours_a4": 262144,
+        "marlin_fp16": 1048576,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 512,
+      "g_spec": "512",
+      "M": 2048,
+      "weight_bytes_total": 7078400,
+      "bpw": 3.375244140625,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 2.7924210081097396e-07,
+        "bf16_mismatch_frac": 4.38690185546875e-05,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 16777216,
+      "expected_peak_bytes": 16777216,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 20851200,
+      "latency_ms": {
+        "mean_ms": 1.2329078364372252,
+        "median_ms": 1.2339199781417847,
+        "min_ms": 1.223680019378662,
+        "max_ms": 1.2493760585784912,
+        "p90_ms": 1.235967993736267,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 16777216,
+        "median_ms": 0.6881279945373535,
+        "min_ms": 0.6399999856948853,
+        "act_bytes_fp16": 16777216
+      },
+      "weight_bytes_vs_marlin": 0.8182410037878788,
+      "latency_vs_marlin": 1.7931547443748186,
+      "activation_bytes": {
+        "ours_a4": 4194304,
+        "marlin_fp16": 16777216,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 4096,
+      "g_spec": "C",
+      "M": 2,
+      "weight_bytes_total": 6390272,
+      "bpw": 3.047119140625,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 1.1318087564064523e-07,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 16384,
+      "expected_peak_bytes": 16384,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 31693824,
+      "latency_ms": {
+        "mean_ms": 0.06364831916987895,
+        "median_ms": 0.06348799914121628,
+        "min_ms": 0.062463998794555664,
+        "max_ms": 0.08083199709653854,
+        "p90_ms": 0.06371200084686279,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 16384,
+        "median_ms": 0.026623999699950218,
+        "min_ms": 0.025599999353289604,
+        "act_bytes_fp16": 16384
+      },
+      "weight_bytes_vs_marlin": 0.7386955492424242,
+      "latency_vs_marlin": 2.384615379233759,
+      "activation_bytes": {
+        "ours_a4": 4096,
+        "marlin_fp16": 16384,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 4096,
+      "g_spec": "C",
+      "M": 16,
+      "weight_bytes_total": 6390272,
+      "bpw": 3.047119140625,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 9.811316099916062e-08,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 131072,
+      "expected_peak_bytes": 131072,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 14961664,
+      "latency_ms": {
+        "mean_ms": 0.0649628796428442,
+        "median_ms": 0.06451199948787689,
+        "min_ms": 0.06348799914121628,
+        "max_ms": 0.08089599758386612,
+        "p90_ms": 0.0655359998345375,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 131072,
+        "median_ms": 0.0315839983522892,
+        "min_ms": 0.02969600073993206,
+        "act_bytes_fp16": 131072
+      },
+      "weight_bytes_vs_marlin": 0.7386955492424242,
+      "latency_vs_marlin": 2.0425532818330163,
+      "activation_bytes": {
+        "ours_a4": 32768,
+        "marlin_fp16": 131072,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 4096,
+      "g_spec": "C",
+      "M": 128,
+      "weight_bytes_total": 6390272,
+      "bpw": 3.047119140625,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 5.998833560047328e-07,
+        "bf16_mismatch_frac": 2.288818359375e-05,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 1048576,
+      "expected_peak_bytes": 1048576,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 15305728,
+      "latency_ms": {
+        "mean_ms": 0.1709161625802517,
+        "median_ms": 0.17100800573825836,
+        "min_ms": 0.16998399794101715,
+        "max_ms": 0.18943999707698822,
+        "p90_ms": 0.17100800573825836,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 1048576,
+        "median_ms": 0.05734400078654289,
+        "min_ms": 0.05632000043988228,
+        "act_bytes_fp16": 1048576
+      },
+      "weight_bytes_vs_marlin": 0.7386955492424242,
+      "latency_vs_marlin": 2.982142916306415,
+      "activation_bytes": {
+        "ours_a4": 262144,
+        "marlin_fp16": 1048576,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 4096,
+      "g": 4096,
+      "g_spec": "C",
+      "M": 2048,
+      "weight_bytes_total": 6390272,
+      "bpw": 3.047119140625,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 5.968731250471006e-07,
+        "bf16_mismatch_frac": 2.0384788513183594e-05,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 16777216,
+      "expected_peak_bytes": 16777216,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 20163072,
+      "latency_ms": {
+        "mean_ms": 1.2152498805522918,
+        "median_ms": 1.2154879570007324,
+        "min_ms": 1.2124160528182983,
+        "max_ms": 1.2390719652175903,
+        "p90_ms": 1.2165119647979736,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 8650752,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 16777216,
+        "median_ms": 0.6881279945373535,
+        "min_ms": 0.6399999856948853,
+        "act_bytes_fp16": 16777216
+      },
+      "weight_bytes_vs_marlin": 0.7386955492424242,
+      "latency_vs_marlin": 1.76636899915391,
+      "activation_bytes": {
+        "ours_a4": 4194304,
+        "marlin_fp16": 16777216,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 512,
+      "g_spec": "512",
+      "M": 2,
+      "weight_bytes_total": 24773120,
+      "bpw": 3.3750697544642856,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 9.710231239384905e-08,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 57344,
+      "expected_peak_bytes": 57344,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 33299456,
+      "latency_ms": {
+        "mean_ms": 0.15790847659111024,
+        "median_ms": 0.15769599378108978,
+        "min_ms": 0.15667200088500977,
+        "max_ms": 0.17423999309539795,
+        "p90_ms": 0.158720001578331,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 57344,
+        "median_ms": 0.05632000043988228,
+        "min_ms": 0.055296000093221664,
+        "act_bytes_fp16": 16384
+      },
+      "weight_bytes_vs_marlin": 0.8181987283549783,
+      "latency_vs_marlin": 2.7999998677098628,
+      "activation_bytes": {
+        "ours_a4": 4096,
+        "marlin_fp16": 16384,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 512,
+      "g_spec": "512",
+      "M": 16,
+      "weight_bytes_total": 24773120,
+      "bpw": 3.3750697544642856,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 8.655300137229049e-08,
+        "bf16_mismatch_frac": 2.615792618598789e-05,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 458752,
+      "expected_peak_bytes": 458752,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 33385472,
+      "latency_ms": {
+        "mean_ms": 0.16478079974651336,
+        "median_ms": 0.16486400365829468,
+        "min_ms": 0.16179199516773224,
+        "max_ms": 0.17919999361038208,
+        "p90_ms": 0.1658879965543747,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 458752,
+        "median_ms": 0.062463998794555664,
+        "min_ms": 0.06143999844789505,
+        "act_bytes_fp16": 131072
+      },
+      "weight_bytes_vs_marlin": 0.8181987283549783,
+      "latency_vs_marlin": 2.639344371796193,
+      "activation_bytes": {
+        "ours_a4": 32768,
+        "marlin_fp16": 131072,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 512,
+      "g_spec": "512",
+      "M": 128,
+      "weight_bytes_total": 24773120,
+      "bpw": 3.3750697544642856,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 2.8647882015913395e-07,
+        "bf16_mismatch_frac": 4.196167355985381e-05,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 3670016,
+      "expected_peak_bytes": 3670016,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 34016256,
+      "latency_ms": {
+        "mean_ms": 0.37454112380743027,
+        "median_ms": 0.37376001477241516,
+        "min_ms": 0.37171199917793274,
+        "max_ms": 0.392192006111145,
+        "p90_ms": 0.3768320083618164,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 3670016,
+        "median_ms": 0.14131200313568115,
+        "min_ms": 0.13926400244235992,
+        "act_bytes_fp16": 1048576
+      },
+      "weight_bytes_vs_marlin": 0.8181987283549783,
+      "latency_vs_marlin": 2.644927582079127,
+      "activation_bytes": {
+        "ours_a4": 262144,
+        "marlin_fp16": 1048576,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 512,
+      "g_spec": "512",
+      "M": 2048,
+      "weight_bytes_total": 24773120,
+      "bpw": 3.3750697544642856,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 2.860591574976299e-07,
+        "bf16_mismatch_frac": 4.584448834066279e-05,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 58720256,
+      "expected_peak_bytes": 58720256,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 41167360,
+      "latency_ms": {
+        "mean_ms": 4.127579197883606,
+        "median_ms": 4.1456639766693115,
+        "min_ms": 4.070400238037109,
+        "max_ms": 4.155392169952393,
+        "p90_ms": 4.150271892547607,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 58720256,
+        "median_ms": 2.6823679208755493,
+        "min_ms": 2.6419200897216797,
+        "act_bytes_fp16": 16777216
+      },
+      "weight_bytes_vs_marlin": 0.8181987283549783,
+      "latency_vs_marlin": 1.5455239918452832,
+      "activation_bytes": {
+        "ours_a4": 4194304,
+        "marlin_fp16": 16777216,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 4096,
+      "g_spec": "C",
+      "M": 2,
+      "weight_bytes_total": 22364672,
+      "bpw": 3.0469447544642856,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 1.0770215727071912e-07,
+        "bf16_mismatch_frac": 0.0,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 57344,
+      "expected_peak_bytes": 57344,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 89611264,
+      "latency_ms": {
+        "mean_ms": 0.15431616097688675,
+        "median_ms": 0.15360000729560852,
+        "min_ms": 0.15052799880504608,
+        "max_ms": 0.16793599724769592,
+        "p90_ms": 0.15689599514007568,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 57344,
+        "median_ms": 0.05632000043988228,
+        "min_ms": 0.055296000093221664,
+        "act_bytes_fp16": 16384
+      },
+      "weight_bytes_vs_marlin": 0.7386532738095238,
+      "latency_vs_marlin": 2.7272728355101123,
+      "activation_bytes": {
+        "ours_a4": 4096,
+        "marlin_fp16": 16384,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 4096,
+      "g_spec": "C",
+      "M": 16,
+      "weight_bytes_total": 22364672,
+      "bpw": 3.0469447544642856,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 9.885616319571855e-08,
+        "bf16_mismatch_frac": 4.359654212748865e-06,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 458752,
+      "expected_peak_bytes": 458752,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 30977024,
+      "latency_ms": {
+        "mean_ms": 0.16216895893216132,
+        "median_ms": 0.16179199516773224,
+        "min_ms": 0.15667200088500977,
+        "max_ms": 0.17507199943065643,
+        "p90_ms": 0.16486400365829468,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 458752,
+        "median_ms": 0.062463998794555664,
+        "min_ms": 0.06143999844789505,
+        "act_bytes_fp16": 131072
+      },
+      "weight_bytes_vs_marlin": 0.7386532738095238,
+      "latency_vs_marlin": 2.5901639070509517,
+      "activation_bytes": {
+        "ours_a4": 32768,
+        "marlin_fp16": 131072,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 4096,
+      "g_spec": "C",
+      "M": 128,
+      "weight_bytes_total": 22364672,
+      "bpw": 3.0469447544642856,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 6.37514099216611e-07,
+        "bf16_mismatch_frac": 1.8528529835748486e-05,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 3670016,
+      "expected_peak_bytes": 3670016,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 31607808,
+      "latency_ms": {
+        "mean_ms": 0.36477536052465437,
+        "median_ms": 0.36454400420188904,
+        "min_ms": 0.3614720106124878,
+        "max_ms": 0.3819519877433777,
+        "p90_ms": 0.3665919899940491,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 3670016,
+        "median_ms": 0.14131200313568115,
+        "min_ms": 0.13926400244235992,
+        "act_bytes_fp16": 1048576
+      },
+      "weight_bytes_vs_marlin": 0.7386532738095238,
+      "latency_vs_marlin": 2.5797101174191903,
+      "activation_bytes": {
+        "ours_a4": 262144,
+        "marlin_fp16": 1048576,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    },
+    {
+      "K": 4096,
+      "N": 14336,
+      "g": 4096,
+      "g_spec": "C",
+      "M": 2048,
+      "weight_bytes_total": 22364672,
+      "bpw": 3.0469447544642856,
+      "weight_bytes_equal_k3_gemv": true,
+      "correctness": {
+        "f32_norm_rel": 6.357770873249393e-07,
+        "bf16_mismatch_frac": 2.5170191293000244e-05,
+        "bitwise_deterministic": true,
+        "certified": true
+      },
+      "peak_mem_delta_bytes": 58720256,
+      "expected_peak_bytes": 58720256,
+      "peak_is_output_only": true,
+      "baseline_allocated_bytes": 38758912,
+      "latency_ms": {
+        "mean_ms": 4.027389788627625,
+        "median_ms": 4.026927947998047,
+        "min_ms": 4.021247863769531,
+        "max_ms": 4.051904201507568,
+        "p90_ms": 4.030464172363281,
+        "iters": 100,
+        "warmup": 25
+      },
+      "marlin": {
+        "weight_bytes": 30277632,
+        "bpw": 4.125,
+        "peak_mem_delta_bytes": 58720256,
+        "median_ms": 2.6823679208755493,
+        "min_ms": 2.6419200897216797,
+        "act_bytes_fp16": 16777216
+      },
+      "weight_bytes_vs_marlin": 0.7386532738095238,
+      "latency_vs_marlin": 1.5012586143229825,
+      "activation_bytes": {
+        "ours_a4": 4194304,
+        "marlin_fp16": 16777216,
+        "ratio": 0.25
+      },
+      "req1_verdict": "PASS"
+    }
+  ],
+  "summary": {
+    "all_correctness_certified": true,
+    "req1_all_pass": true,
+    "warm_loop_1000_calls_reserved_growth_bytes": 0,
+    "worst_latency_ratio_vs_marlin": 3.017857213621398,
+    "activation_note": "A4 input activations are M*C/2 bytes vs Marlin's fp16 M*C*2 bytes (4x smaller) \u2014 real Req-1 margin at model scale, legitimate under Req 3 (W2A4)."
+  },
+  "markdown_table": "| shape KxN | g | M | bpw | weight bytes | marlin bytes | peak delta (B) | marlin peak (B) | dpk med ms | marlin med ms | lat ratio | act bytes ours/marlin | correctness | Req-1 |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n| 4096x4096 | 512 | 2 | 3.3752 | 7078400 | 8650752 | 16384 | 16384 | 0.0696 | 0.0266 | 2.62x | 4,096/16,384 | PASS | PASS |\n| 4096x4096 | 512 | 16 | 3.3752 | 7078400 | 8650752 | 131072 | 131072 | 0.0717 | 0.0316 | 2.27x | 32,768/131,072 | PASS | PASS |\n| 4096x4096 | 512 | 128 | 3.3752 | 7078400 | 8650752 | 1048576 | 1048576 | 0.1731 | 0.0573 | 3.02x | 262,144/1,048,576 | PASS | PASS |\n| 4096x4096 | 512 | 2048 | 3.3752 | 7078400 | 8650752 | 16777216 | 16777216 | 1.2339 | 0.6881 | 1.79x | 4,194,304/16,777,216 | PASS | PASS |\n| 4096x4096 | 4096 | 2 | 3.0471 | 6390272 | 8650752 | 16384 | 16384 | 0.0635 | 0.0266 | 2.38x | 4,096/16,384 | PASS | PASS |\n| 4096x4096 | 4096 | 16 | 3.0471 | 6390272 | 8650752 | 131072 | 131072 | 0.0645 | 0.0316 | 2.04x | 32,768/131,072 | PASS | PASS |\n| 4096x4096 | 4096 | 128 | 3.0471 | 6390272 | 8650752 | 1048576 | 1048576 | 0.1710 | 0.0573 | 2.98x | 262,144/1,048,576 | PASS | PASS |\n| 4096x4096 | 4096 | 2048 | 3.0471 | 6390272 | 8650752 | 16777216 | 16777216 | 1.2155 | 0.6881 | 1.77x | 4,194,304/16,777,216 | PASS | PASS |\n| 4096x14336 | 512 | 2 | 3.3751 | 24773120 | 30277632 | 57344 | 57344 | 0.1577 | 0.0563 | 2.80x | 4,096/16,384 | PASS | PASS |\n| 4096x14336 | 512 | 16 | 3.3751 | 24773120 | 30277632 | 458752 | 458752 | 0.1649 | 0.0625 | 2.64x | 32,768/131,072 | PASS | PASS |\n| 4096x14336 | 512 | 128 | 3.3751 | 24773120 | 30277632 | 3670016 | 3670016 | 0.3738 | 0.1413 | 2.64x | 262,144/1,048,576 | PASS | PASS |\n| 4096x14336 | 512 | 2048 | 3.3751 | 24773120 | 30277632 | 58720256 | 58720256 | 4.1457 | 2.6824 | 1.55x | 4,194,304/16,777,216 | PASS | PASS |\n| 4096x14336 | 4096 | 2 | 3.0469 | 22364672 | 30277632 | 57344 | 57344 | 0.1536 | 0.0563 | 2.73x | 4,096/16,384 | PASS | PASS |\n| 4096x14336 | 4096 | 16 | 3.0469 | 22364672 | 30277632 | 458752 | 458752 | 0.1618 | 0.0625 | 2.59x | 32,768/131,072 | PASS | PASS |\n| 4096x14336 | 4096 | 128 | 3.0469 | 22364672 | 30277632 | 3670016 | 3670016 | 0.3645 | 0.1413 | 2.58x | 262,144/1,048,576 | PASS | PASS |\n| 4096x14336 | 4096 | 2048 | 3.0469 | 22364672 | 30277632 | 58720256 | 58720256 | 4.0269 | 2.6824 | 1.50x | 4,194,304/16,777,216 | PASS | PASS |"
+}
