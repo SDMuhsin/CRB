@@ -240,16 +240,16 @@ class TunedQuantLinear(nn.Module):
 # ---------------------------------------------------------------------------
 # Model + calibration (identical to run.py's standard path)
 # ---------------------------------------------------------------------------
-def load_model_and_calib(device):
+def load_model_and_calib(device, nsamples=128):
     os.chdir(REPO)
     import run as run_mod                     # argparse is __main__-guarded
     from datautils import get_loaders
     model = run_mod.get_model(MODEL_NAME)
     model.eval()
     assert model.seqlen == 2048, model.seqlen
-    dataloader, _ = get_loaders("wikitext2", nsamples=128, seed=0,
+    dataloader, _ = get_loaders("wikitext2", nsamples=nsamples, seed=0,
                                 model=MODEL_NAME, seqlen=model.seqlen)
-    assert len(dataloader) == 128
+    assert len(dataloader) == nsamples
     return model, dataloader
 
 

@@ -29,6 +29,7 @@ Usage:
 
 import argparse
 import gc
+import json
 import math
 import os
 import sys
@@ -369,7 +370,14 @@ def _awq_capture_input_feats(block, inps, layer_kwargs, dev, n_calib, layer_name
             return _hook
         hooks.append(module.register_forward_hook(_make_hook(name)))
 
-    for j in range(n_calib):
+    # AWQ-paper practice caps its calibration at 128 samples; capping the
+    # CAPTURE (not TesseraQ training) at 128 bounds host RAM: with 512
+    # samples the stored feats for one Qwen3-4B block are ~31 GB and OOM-kill
+    # the run (observed 2026-07-23). The 20-point scalar grid search per
+    # subset is insensitive to 128-vs-512 calib; the end-to-end repro gate
+    # (PPL/ARC vs the April numbers) checks this empirically.
+    n_capture = min(n_calib, 128)
+    for j in range(n_capture):
         with torch.cuda.amp.autocast():
             _ = block(inps[j].unsqueeze(0).to(dev), **layer_kwargs)
 
@@ -815,6 +823,22 @@ class TesseraQOptimizer:
             del input_feat
             torch.cuda.empty_cache()
 
+        # 1c. Optional wref snapshot for cell-level error analysis: the block's
+        # Linear weights AFTER AWQ scale folding but BEFORE auto-clip. This is
+        # the correct per-cell reference in the folded coordinate system —
+        # (final wq − wref) is TesseraQ's total cell-level quantization error
+        # (clipping included). Saved fp32 (block is .float() here).
+        if getattr(self, 'wref_dir', None):
+            from safetensors.torch import save_file as _sf_wref
+            os.makedirs(self.wref_dir, exist_ok=True)
+            pref = getattr(self, 'wref_prefix', '')
+            with torch.no_grad():
+                for _name, _lin in get_linear_layers(block).items():
+                    _sf_wref(
+                        {"wref": _lin.weight.data.detach().cpu().contiguous()},
+                        os.path.join(self.wref_dir,
+                                     f"{pref}{_name}.wref.safetensors"))
+
         # 2. Auto-clip weights (weight is already FP32 after block.float())
         print("    Auto-clipping weights...")
         linears = get_linear_layers(block)
@@ -1089,11 +1113,17 @@ def tesseraq_quantize(model, trainloader, args):
         grad_clip=args.grad_clip,
     )
 
+    # Route the wref snapshots (post-AWQ-fold pre-clip references) into the
+    # --save_quantized dir so the analysis artifacts live together.
+    if getattr(args, 'save_quantized', None):
+        optimizer.wref_dir = os.path.abspath(args.save_quantized)
+
     total_start = time.time()
     for i in range(len(layers)):
         print(f"\n--- Block {i}/{len(layers)} ---")
         block_start = time.time()
 
+        optimizer.wref_prefix = f"model.layers.{i}."
         outs = optimizer.optimize_block(layers[i], inps, layer_kwargs, dev, nsamples)
         inps = outs  # propagate quantized outputs to next block
 
@@ -1133,6 +1163,10 @@ def main():
                         help='AWQ per-subset scale init (paper-faithful, default on).')
     parser.add_argument('--no_awq_init', dest='use_awq_init', action='store_false',
                         help='Disable AWQ init (PAR-only legacy mode).')
+    parser.add_argument('--save_quantized', type=str, default=None,
+                        help='Directory to dump per-sublayer quantized weights '
+                             '(<layer>.wq.safetensors + manifest.json, doml_dumps '
+                             'layout) right after quantization, before eval.')
     parser.add_argument('--grad_clip', type=float, default=1.0,
                         help='Max grad norm for NativeScalerWithGradNormCount-equivalent clipping.')
     from csv_utils import append_result as csv_append
@@ -1155,6 +1189,52 @@ def main():
     tick = time.time()
     model = tesseraq_quantize(model, trainloader, args)
     quant_time = time.time() - tick
+
+    # Save quantized per-sublayer weights immediately after quantization (before
+    # eval) so a multi-hour training run can never be lost to an eval crash.
+    # Layout mirrors doml_dumps: one <layer_name>.wq.safetensors per Linear.
+    if args.save_quantized:
+        from safetensors.torch import save_file as _save_file
+        out_dir = os.path.abspath(args.save_quantized)
+        os.makedirs(out_dir, exist_ok=True)
+        n_saved = 0
+        norm_params = {}
+        for li, block in enumerate(model.model.layers):
+            linear_weight_keys = set()
+            for name, mod in block.named_modules():
+                if isinstance(mod, nn.Linear):
+                    fname = f"model.layers.{li}.{name}.wq.safetensors"
+                    _save_file({"wq": mod.weight.data.contiguous().cpu()},
+                               os.path.join(out_dir, fname))
+                    linear_weight_keys.add(f"{name}.weight")
+                    if mod.bias is not None:
+                        linear_weight_keys.add(f"{name}.bias")
+                    n_saved += 1
+            # AWQ init mutates non-Linear params (RMSNorm weights via scale
+            # folding). A restore that skipped them would be silently wrong —
+            # capture every remaining block parameter.
+            for pname, p in block.named_parameters():
+                if pname not in linear_weight_keys:
+                    norm_params[f"model.layers.{li}.{pname}"] = \
+                        p.data.contiguous().cpu()
+        if norm_params:
+            _save_file(norm_params, os.path.join(out_dir, "norms.safetensors"))
+        with open(os.path.join(out_dir, "manifest.json"), "w") as f:
+            json.dump({"model": args.model, "method": "tesseraq",
+                       "bit": args.bit, "group_size": args.group_size,
+                       "iterations": args.iterations, "seed": args.seed,
+                       "nsamples": args.nsamples,
+                       "awq_init": args.use_awq_init,
+                       "grad_clip": args.grad_clip,
+                       "quantization_time_s": quant_time,
+                       "n_sublayers": n_saved,
+                       "has_norms": bool(norm_params),
+                       "has_wref": True,
+                       "wref_note": "wref = post-AWQ-fold pre-clip fp32 "
+                                    "reference; wq/norms = eval-exact bf16"},
+                      f, indent=2)
+        print(f"Saved {n_saved} quantized sublayer weight files to {out_dir}",
+              flush=True)
 
     bpw = args.bit + (32 / args.group_size)
     extra = {"bit": args.bit, "group_size": args.group_size, "iterations": args.iterations,

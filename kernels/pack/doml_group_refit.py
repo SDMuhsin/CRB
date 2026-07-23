@@ -1378,6 +1378,12 @@ def main_restore(args):
     sys.argv = list(RUN_ARGV)
     if args.eval_extra_ppl:
         sys.argv.append("--eval_extra_ppl")
+    if args.eval_arc:
+        sys.argv.append("--eval_arc")
+    if args.eval_mmlu:
+        sys.argv.append("--eval_mmlu")
+    if args.eval_hellaswag:
+        sys.argv.append("--eval_hellaswag")
     print("K33RESTORE: launching run.py:", sys.argv, flush=True)
     err = None
     try:
@@ -1960,6 +1966,16 @@ if __name__ == "__main__":
                     help="restore mode only: pass --eval_extra_ppl through to "
                          "run.py (adds c4 + ptb PPL rows to the standard "
                          "wikitext2 eval). Default off.")
+    ap.add_argument("--eval-arc", action="store_true",
+                    help="restore mode only: pass --eval_arc through to "
+                         "run.py (adds ARC-Easy + ARC-Challenge accuracy rows "
+                         "after the standard wikitext2 eval). Default off.")
+    ap.add_argument("--eval-mmlu", action="store_true",
+                    help="restore mode only: pass --eval_mmlu through to "
+                         "run.py. Default off.")
+    ap.add_argument("--eval-hellaswag", action="store_true",
+                    help="restore mode only: pass --eval_hellaswag through "
+                         "to run.py. Default off.")
     args = ap.parse_args()
     if args.restore_dpk:
         if not args.run:

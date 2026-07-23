@@ -177,6 +177,8 @@ def main_restore(args):
     sys.argv = build_run_argv(args.device, man.get("argv"))
     if args.eval_extra_ppl:
         sys.argv.append("--eval_extra_ppl")
+    if args.eval_arc:
+        sys.argv.append("--eval_arc")
     print("SDRESTORE: launching run.py:", sys.argv, flush=True)
     err = None
     try:
@@ -210,5 +212,8 @@ if __name__ == "__main__":
     ap.add_argument("--eval-extra-ppl", action="store_true",
                     help="also evaluate c4 + ptb PPL (passes --eval_extra_ppl "
                          "through to run.py)")
+    ap.add_argument("--eval-arc", action="store_true",
+                    help="also evaluate ARC-Easy + ARC-Challenge accuracy "
+                         "(passes --eval_arc through to run.py)")
     args = ap.parse_args()
     main_restore(args)

@@ -366,8 +366,68 @@ def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
     t_warm = int(args.warmup_frac * T)
     t_drift = int(args.drift_start * T)
     t_ph1 = int(args.two_phase_frac * T)
+
+    # ---- G4 (TesseraQ graft): progressive confidence freezing -----------
+    # pra_stages S > 0 (pair mode only): the T steps are split into S equal
+    # stages; at each stage boundary the most-CONFIDENT (|h-0.5| largest)
+    # still-unfrozen cells are HARD-COMMITTED (v saturated to ±V_SAT so
+    # h ∈ {0,1} exactly) until the cumulative frozen fraction reaches s/S;
+    # a gradient hook zeroes their updates. This replaces the decoupled
+    # outward drift (disabled when S > 0) — it is the DOML-container analog
+    # of TesseraQ's 20-threshold progressive adaptive rounding.
+    pra_S = int(getattr(args, "pra_stages", 0) or 0)
+    frozen = {}
+    if pra_S > 0 and args.mode == "pair":
+        t_drift = T + 1                       # drift OFF under PRA
+        V_SAT = 20.0
+        for name, ql in qlin.items():
+            frozen[name] = torch.zeros_like(ql.v, dtype=torch.bool)
+
+            def _mk_hook(_name):
+                def _hook(g):
+                    return g.masked_fill(frozen[_name], 0.0)
+                return _hook
+
+            ql.v.register_hook(_mk_hook(name))
+        stage_bounds = [int(T * (s + 1) / pra_S) for s in range(pra_S)]
+
+        def _freeze_to_fraction(frac):
+            with torch.no_grad():
+                for name, ql in qlin.items():
+                    fr = frozen[name]
+                    elig = ql.has_alt
+                    n_elig = int(elig.sum().item())
+                    if n_elig == 0:
+                        continue
+                    target_n = int(round(frac * n_elig))
+                    cur_n = int((fr & elig).sum().item())
+                    n_new = target_n - cur_n
+                    if n_new <= 0:
+                        continue
+                    h = ql.h_pair()
+                    conf = (h - 0.5).abs().masked_fill(~elig, -1.0)
+                    conf = conf.masked_fill(fr, -1.0)   # already frozen
+                    flat = conf.flatten()
+                    idx = torch.topk(flat, n_new).indices
+                    newly = torch.zeros_like(flat, dtype=torch.bool)
+                    newly[idx] = True
+                    newly = newly.view_as(fr)
+                    ql.v.data = torch.where(
+                        newly,
+                        torch.where(h > 0.5,
+                                    torch.full_like(ql.v, V_SAT),
+                                    torch.full_like(ql.v, -V_SAT)),
+                        ql.v.data)
+                    frozen[name] = fr | newly
+
     loss_first = loss_last = None
     for step in range(T):
+        if pra_S > 0 and args.mode == "pair" and step in stage_bounds:
+            s_idx = stage_bounds.index(step) + 1
+            _freeze_to_fraction(s_idx / pra_S)
+            n_fr = sum(int(f.sum().item()) for f in frozen.values())
+            print(f"  b{bi:02d} PRA stage {s_idx}/{pra_S}: frozen={n_fr}",
+                  flush=True)
         f = lr_factor(step, T)
         opt.param_groups[0]["lr"] = args.lr * f
         opt.param_groups[1]["lr"] = (
@@ -673,6 +733,14 @@ def main():
                     help="pair mode: fraction of steps before the drift "
                          "ramp starts")
     ap.add_argument("--steps", type=int, default=500)
+    ap.add_argument("--nsamples", type=int, default=128,
+                    help="calibration samples (G4 graft: TesseraQ uses 512; "
+                         "default 128 = historical behavior)")
+    ap.add_argument("--pra-stages", type=int, default=0,
+                    help="G4 graft (pair mode): >0 enables TesseraQ-style "
+                         "progressive confidence freezing over this many "
+                         "equal stages (disables the outward drift). "
+                         "0 = off (byte-identical historical path).")
     ap.add_argument("--lr", type=float, default=3e-2,
                     help="Adam lr on assignment logits")
     ap.add_argument("--lr-lev", type=float, default=1e-3,
@@ -747,11 +815,19 @@ def main():
 
     print("K31A: loading model + calibration (standard run.py path)...",
           flush=True)
-    model, dataloader = kbt.load_model_and_calib(device)
+    model, dataloader = kbt.load_model_and_calib(device,
+                                                 nsamples=args.nsamples)
     inps, layer_kwargs = kbt.capture_block0_inputs(model, dataloader, device)
     layers = model.model.layers
     assert len(layers) == N_BLOCKS
     print(f"K31A: captured {inps.shape} block-0 inputs", flush=True)
+    # Park the whole model on CPU after capture: with --nsamples 512 at 4B
+    # the resident model (8 GB) + sample buffers otherwise OOM a 46 GB card
+    # during backward (observed 2026-07-23). The block loop moves each block
+    # to the device on demand and parks it back afterwards; captured inps /
+    # layer_kwargs tensors are separate device tensors and stay put.
+    model.cpu()
+    torch.cuda.empty_cache()
 
     x_fp = inps
     x_q = inps.clone()
@@ -793,8 +869,16 @@ def main():
         layers[bi] = layers[bi].cpu()
         torch.cuda.empty_cache()
 
-    final_mse = (x_q.float() - x_fp.float()).pow(2).mean().item()
-    ref = x_fp.float().pow(2).mean().item()
+    # chunked: full fp32 materialization of two [N,2048,H] tensors is 2x10.7
+    # GiB at nsamples=512 on 4B and OOMs (observed 2026-07-23)
+    _se = _ref = 0.0
+    for _st in range(0, x_q.shape[0], 8):
+        _a = x_q[_st:_st + 8].float()
+        _b = x_fp[_st:_st + 8].float()
+        _se += (_a - _b).pow(2).sum().item()
+        _ref += _b.pow(2).sum().item()
+    final_mse = _se / x_fp.numel()
+    ref = _ref / x_fp.numel()
     print(f"K31A: final-stream MSE after block {n_blocks - 1}: "
           f"{final_mse:.6e} (rel {final_mse / ref:.4e})", flush=True)
     fr = [b["flip_rate"] for b in tune_log]
@@ -839,6 +923,7 @@ def main():
         "retune_steps": args.retune_steps,
         "retune_lr": args.retune_lr, "batch": args.batch,
         "grad_clip": args.grad_clip,
+        "nsamples": args.nsamples, "pra_stages": args.pra_stages,
         "parameterization": (
             "pair: AdaRound rectified-sigmoid (zeta=1.1, gamma_s=-0.1) "
             "between current slot and nearest-by-value REAL alternative "
@@ -848,7 +933,8 @@ def main():
             "orig dump)")
         + " + stage-1 delta/fp8-STE levels; hard commit + levels-only "
           "re-tune",
-        "calib": "wikitext2 nsamples=128 seed=0 seqlen=2048 (run.py path)",
+        "calib": (f"wikitext2 nsamples={args.nsamples} seed=0 seqlen=2048 "
+                  f"(run.py path)"),
         "byte_compare": cmp_summary,
         "final_stream_mse": final_mse,
         "blocks": tune_log,
