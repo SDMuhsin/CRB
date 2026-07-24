@@ -37,7 +37,7 @@ def get_model(model_name):
             from transformers import OPTForCausalLM
             model = OPTForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
             model.seqlen = model.config.max_position_embeddings
-        elif "llama" in model_name.lower() or "danube" in model_name.lower():
+        elif "llama" in model_name.lower() or "danube" in model_name.lower() or "falcon" in model_name.lower() or "helium" in model_name.lower():
             from transformers import LlamaForCausalLM
             model = LlamaForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
             model.seqlen = 2048
@@ -48,6 +48,15 @@ def get_model(model_name):
         elif "smollm" in model_name.lower():
             from transformers import AutoModelForCausalLM
             model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
+            model.seqlen = min(model.config.max_position_embeddings, 2048)
+        elif "olmo" in model_name.lower():
+            # Olmo2ForCausalLM (e.g. allenai/OLMo-2-0425-1B): llama-style
+            # model.model.layers access, loaded via AutoModelForCausalLM.
+            # OLMo-2 checkpoints are stored fp32; load in bf16 to match every
+            # other model family (doml_dump.derive_dpk asserts bf16 weights).
+            import torch as _torch
+            from transformers import AutoModelForCausalLM
+            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=_torch.bfloat16, cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
             model.seqlen = min(model.config.max_position_embeddings, 2048)
         elif "pythia" in model_name.lower():
             from transformers import GPTNeoXForCausalLM
@@ -146,7 +155,7 @@ def quant_sequential(model, dataloader, dev):
             and model.model.decoder.project_in
         ):
             model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
         layers = model.model.layers
         model.model.embed_tokens = model.model.embed_tokens.to(dev)
         model.model.norm = model.model.norm.to(dev)
@@ -215,7 +224,7 @@ def quant_sequential(model, dataloader, dev):
             and model.model.decoder.project_in
         ):
             model.model.decoder.project_in = model.model.decoder.project_in.cpu()
-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
         model.model.embed_tokens = model.model.embed_tokens.cpu()
         model.model.norm = model.model.norm.cpu()
         if hasattr(model.model, "rotary_emb"):
@@ -549,7 +558,7 @@ def sbh_sequential(model, dataloader, dev, r_attn=60, r_mlp=30):
             model.model.decoder.project_out = model.model.decoder.project_out.to(dev)
         if hasattr(model.model.decoder, "project_in") and model.model.decoder.project_in:
             model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
         layers = model.model.layers
         model.model.embed_tokens = model.model.embed_tokens.to(dev)
         model.model.norm = model.model.norm.to(dev)
@@ -599,7 +608,7 @@ def sbh_sequential(model, dataloader, dev, r_attn=60, r_mlp=30):
     if "opt" in args.model:
         model.model.decoder.embed_tokens = model.model.decoder.embed_tokens.cpu()
         model.model.decoder.embed_positions = model.model.decoder.embed_positions.cpu()
-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
         model.model.embed_tokens = model.model.embed_tokens.cpu()
         model.model.norm = model.model.norm.cpu()
         if hasattr(model.model, "rotary_emb"):
@@ -687,7 +696,7 @@ def mixed_sequential(model, dataloader, dev):
         layers = model.model.decoder.layers
         model.model.decoder.embed_tokens = model.model.decoder.embed_tokens.to(dev)
         model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(dev)
-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
         layers = model.model.layers
         model.model.embed_tokens = model.model.embed_tokens.to(dev)
         model.model.norm = model.model.norm.to(dev)
@@ -736,7 +745,7 @@ def mixed_sequential(model, dataloader, dev):
     if "opt" in args.model:
         model.model.decoder.embed_tokens = model.model.decoder.embed_tokens.cpu()
         model.model.decoder.embed_positions = model.model.decoder.embed_positions.cpu()
-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
+    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
         model.model.embed_tokens = model.model.embed_tokens.cpu()
         model.model.norm = model.model.norm.cpu()
         if hasattr(model.model, "rotary_emb"):
@@ -890,7 +899,12 @@ if __name__ == "__main__":
         "--salient_metric",
         type=str,
         default="magnitude",
-        choices=["magnitude", "hessian"],
+        choices=["magnitude", "hessian", "actmag"],
+        help="Salient-column selection metric. 'actmag' ranks columns by "
+             "s_j * sum_i |W_ij| with s = AWQ activation scale a**alpha "
+             "(computed from calib, NOT applied to the weights); linears "
+             "outside the AWQ v1 norm-group scope (o_proj/down_proj) fall "
+             "back to plain magnitude.",
     )
     parser.add_argument(
         "--partition",
@@ -1248,6 +1262,79 @@ if __name__ == "__main__":
         if(args.just_download):
             print(f"Just download flag set, exiting")
             exit()
+
+        # AWQ / SmoothQuant-style activation-scaling transform (opt-in via
+        # CRB_AWQ_ALPHA). Output-preserving reparametrization of the FP model
+        # folded into the RMSNorm weights (zero extra stored tensors -> bpw
+        # unchanged). Applied AFTER model load + calibration data is ready but
+        # BEFORE any per-layer Hessian accumulation / quantization, so DOML (and
+        # every other method) then quantizes the transformed model transparently.
+        # Unset env -> byte-identical to the previous behaviour.
+        if os.environ.get('CRB_AWQ_ALPHA'):
+            from kernels.pack.awq_transform import apply_awq_from_calib
+            _awq_alpha = float(os.environ['CRB_AWQ_ALPHA'])
+            print(f"[AWQ] CRB_AWQ_ALPHA set -> applying activation scaling (alpha={_awq_alpha})")
+            _awq_scales = apply_awq_from_calib(model, dataloader, _awq_alpha, device)
+            # Persist the per-layer scales so restore/btune/atune can re-apply
+            # the g <- g/s norm fold (the DPK dump stores only the quantized
+            # linears; the modified RMSNorm weights are NOT in the dump).
+            _awq_scale_out = os.environ.get('CRB_AWQ_SCALE_OUT')
+            if _awq_scale_out:
+                from kernels.pack.awq_transform import save_scales
+                save_scales(_awq_scales, _awq_scale_out)
+                print(f"[AWQ] saved per-layer scales -> {_awq_scale_out}")
+
+        # AWQ v2 (2026-07-24, opt-in via CRB_AWQ_V2=1 IN ADDITION to
+        # CRB_AWQ_ALPHA; unset -> bit-identical behavior): extend the scaling
+        # to o_proj/down_proj. The inverse folds land in v_proj/up_proj OUTPUT
+        # ROWS (quantized linears, same block) — NOT in any norm — so the DPK
+        # dump captures everything and restore/btune/atune need NO v2 fold.
+        # Runs AFTER the v1 fold above: v2's calibration pass therefore sees
+        # the v1-TRANSFORMED model, matching what will be quantized (v1 is
+        # output-preserving, and v1/v2 touch different axes of v_proj, so the
+        # two compose). Same alpha as v1.
+        if os.environ.get('CRB_AWQ_V2') == '1':
+            if not os.environ.get('CRB_AWQ_ALPHA'):
+                raise RuntimeError(
+                    "CRB_AWQ_V2=1 requires CRB_AWQ_ALPHA to be set (v2 "
+                    "extends the v1 transform and reuses its alpha)")
+            from kernels.pack.awq_transform import (
+                apply_awq_v2_from_calib, save_v2_scales)
+            print(f"[AWQV2] CRB_AWQ_V2=1 -> extending activation scaling to "
+                  f"o_proj/down_proj (alpha={_awq_alpha})", flush=True)
+            _awq_v2_scales, _awq_v2_meta = apply_awq_v2_from_calib(
+                model, dataloader, _awq_alpha, device)
+            print(f"AWQV2: scaled o_proj/down_proj "
+                  f"({_awq_v2_meta['n_groups']} groups, "
+                  f"GQA n_rep={_awq_v2_meta['n_rep']})", flush=True)
+            # Analysis-only artifact: restore must NEVER fold these (the v2
+            # folds are already inside the dumped quantized linears).
+            _awq_v2_out = os.environ.get('CRB_AWQ_V2_SCALE_OUT')
+            if _awq_v2_out:
+                save_v2_scales(_awq_v2_scales, _awq_v2_out)
+                print(f"[AWQV2] saved per-layer v2 scales -> {_awq_v2_out}")
+
+        # CRB_SALIENT_METRIC=actmag (2026-07-23): activation-aware SALIENT
+        # SELECTION ONLY. Compute the AWQ scales s = a**alpha (same math and
+        # v1 norm-group scope as the CRB_AWQ_ALPHA transform above) but do NOT
+        # modify any weight or norm; instead stash s on each covered linear
+        # (plain `_crb_actmag_s` attribute) so the salient-column search ranks
+        # columns by s_j * sum_i |W_ij| (see utils/structure.py "actmag").
+        # o_proj/down_proj have no stash and keep the plain magnitude ranking.
+        # Guard: only --salient_metric actmag enters this block, so the
+        # default magnitude/hessian paths are bit-identical to before.
+        if args.salient_metric == 'actmag':
+            from kernels.pack.awq_transform import (
+                collect_scales_from_calib, attach_selection_scales)
+            _actmag_alpha = float(os.environ.get('CRB_ACTMAG_ALPHA', '0.5'))
+            print(f"[ACTMAG] salient_metric=actmag -> computing AWQ scales "
+                  f"(alpha={_actmag_alpha}) WITHOUT applying them", flush=True)
+            _actmag_scales = collect_scales_from_calib(
+                model, dataloader, alpha=_actmag_alpha, device=device)
+            _n_cov, _n_fb = attach_selection_scales(model, _actmag_scales)
+            print(f"ACTMAG: using activation-scaled magnitude saliency "
+                  f"({_n_cov} linears covered, {_n_fb} fallback)", flush=True)
+
         if args.low_quant_method == "fp16":
             print("FP16 mode: skipping quantization")
         elif args.low_quant_method == "sbh":

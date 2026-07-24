@@ -28,7 +28,7 @@ import sys
 import torch
 import torch.nn as nn
 
-REPO = "/workspace/BiLLM2"
+REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 

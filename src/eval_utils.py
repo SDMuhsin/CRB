@@ -67,7 +67,7 @@ def get_ppl_eval_fn(model_name: str):
     if "opt" in name:
         from eval_ppl_utils import opt_eval
         return opt_eval
-    if "llama" in name or "danube" in name:
+    if "llama" in name or "danube" in name or "falcon" in name or "helium" in name or "olmo" in name:
         from eval_ppl_utils import llama_eval
         return llama_eval
     if "qwen" in name or "smollm" in name:

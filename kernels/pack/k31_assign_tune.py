@@ -61,10 +61,11 @@ import glob
 import json
 import math
 import os
+import shutil
 import sys
 import time
 
-REPO = "/workspace/BiLLM2"
+REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -320,13 +321,23 @@ def lr_factor(step, total, floor=0.1):
 
 
 def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
-                      device, log):
+                      device, log, awq_block_scales=None):
     """Returns (final frozen block, {name: cb fp8 [R,NG,3,4] cpu},
     {name: committed codes uint8 [R,C_orig] cpu}, stats)."""
     t0 = time.time()
     block_q = copy.deepcopy(block_fp).to(device)
     for p in block_q.parameters():
         p.requires_grad_(False)
+
+    # AWQ: the sublayer codebooks are Quant(W.diag(s)); the deepcopied RMSNorm
+    # weights are still pristine g. Fold g <- g/s on block_q's two norm groups so
+    # block_q matches block_fp's math (block_fp stays the PRISTINE FP target — do
+    # NOT touch it). None -> no-op (plain dump, unchanged).
+    if awq_block_scales is not None:
+        for _key in ("input_layernorm", "post_attention_layernorm"):
+            _s = awq_block_scales[_key]
+            _w = getattr(block_q, _key).weight
+            _w.data.div_(_s.to(dtype=_w.dtype, device=_w.device))
 
     qlin = {}
     for name in SUBLAYER_NAMES:
@@ -748,6 +759,18 @@ def main():
     print("K31A: loading model + calibration (standard run.py path)...",
           flush=True)
     model, dataloader = kbt.load_model_and_calib(device)
+
+    # AWQ: if the source (btuned) dump carries awq_scales.safetensors, load the
+    # per-layer scales so the RMSNorm g <- g/s fold is re-applied in
+    # tune_block_assign. Absent -> None (plain dump, byte-identical behaviour).
+    awq_scales = None
+    _awq_scale_path = os.path.join(src_dir, "awq_scales.safetensors")
+    if os.path.exists(_awq_scale_path):
+        from awq_transform import load_scales
+        awq_scales = load_scales(_awq_scale_path)
+        print(f"K31A: loaded AWQ scales for {len(awq_scales)} layers from "
+              f"{_awq_scale_path}", flush=True)
+
     inps, layer_kwargs = kbt.capture_block0_inputs(model, dataloader, device)
     layers = model.model.layers
     assert len(layers) == N_BLOCKS
@@ -775,7 +798,8 @@ def main():
         target = kbt.forward_stream(block_fp, x_fp, layer_kwargs)
         block_q, final_cb, codes_new, _stats = tune_block_assign(
             bi, block_fp, subs, nreals, x_q, target, layer_kwargs, args,
-            device, tune_log)
+            device, tune_log,
+            awq_block_scales=(awq_scales[bi] if awq_scales else None))
         x_q = kbt.forward_stream(block_q, x_q, layer_kwargs)
         x_fp = target
         for name in SUBLAYER_NAMES:
@@ -819,6 +843,12 @@ def main():
     for lname in all_final_cb:
         write_assign_layer(out_dir, all_subs[lname], all_final_cb[lname],
                            all_codes[lname])
+    # AWQ: carry the per-layer scales forward so the atuned dump can still be
+    # restored with the g <- g/s fold. Absent -> nothing to copy.
+    if os.path.exists(_awq_scale_path):
+        shutil.copy2(_awq_scale_path,
+                     os.path.join(out_dir, "awq_scales.safetensors"))
+        print(f"K31A: copied awq_scales.safetensors -> {out_dir}", flush=True)
     print(f"K31A: wrote {len(all_final_cb)} tuned sublayers -> {out_dir}",
           flush=True)
 

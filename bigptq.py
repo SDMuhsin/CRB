@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import transformers
 from utils.structure import structural_guassian_distribution
+from utils.structure import actmag_col_scale  # CRB_SALIENT_METRIC=actmag
 
 DEBUG = False
 
@@ -139,7 +140,17 @@ class BRAGPTQ:
                 # No structural partition — single all-ones mask (for DOML, etc.)
                 mask[0] = torch.ones_like(W[:, st:ed], dtype=torch.bool)
             else:
-                mask1, mask2, mask3 = structural_guassian_distribution(W[:, st:ed], H[st:ed, st:ed], self.salient_metric, 50, orders=orders)
+                # CRB_SALIENT_METRIC=actmag: activation-scaled magnitude column
+                # RANKING (weights untouched). _cs is None unless the metric is
+                # "actmag" AND this linear carries a stashed AWQ scale, and the
+                # legacy call below stays byte-identical in that case (also
+                # keeps dump-mode monkeypatch wrappers with the original
+                # signature working).
+                _cs = actmag_col_scale(self.layer, st, ed, self.salient_metric)
+                if _cs is not None:
+                    mask1, mask2, mask3 = structural_guassian_distribution(W[:, st:ed], H[st:ed, st:ed], self.salient_metric, 50, orders=orders, col_scale=_cs)
+                else:
+                    mask1, mask2, mask3 = structural_guassian_distribution(W[:, st:ed], H[st:ed, st:ed], self.salient_metric, 50, orders=orders)
                 mask[0] = mask1
                 mask[1] = mask2
                 mask[2] = mask3

@@ -43,12 +43,15 @@ def opt_eval_mrr(model, model_name, dev, save_title='UNNAMED_OPT_MRR'):
     """
     print("Evaluating MRR on PTB test set ...")
 
-    from datautils import get_tokenizer
+    from datautils import get_tokenizer, _ptb_load_split
     tokenizer = get_tokenizer(model_name)
 
-    # Load PTB test set
-    testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test')
-    testenc = tokenizer(" ".join(testdata['sentence']), return_tensors='pt')
+    # Load PTB test set. The HF `ptb_text_only` repo is script-only and
+    # datasets >= 4 dropped script loaders, so go through datautils'
+    # loader, which reads the canonical Mikolov splits as raw text
+    # (identical sentences after .strip()).
+    sentences = _ptb_load_split('test')
+    testenc = tokenizer(" ".join(sentences), return_tensors='pt')
     test_ids = testenc.input_ids  # [1, total_tokens]
 
     seqlen = model.seqlen

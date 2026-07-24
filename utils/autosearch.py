@@ -25,7 +25,7 @@ def calculate_percentage_and_variance_original(weights, abs_weights, bin_edges):
 '''
 Include main method to search the rate for 2-bit salient data columns and the optimal split for 1-bit data
 '''
-def structural_searching(origin_matrix, up_lim=30, orders=(1,1,2)):
+def structural_searching(origin_matrix, up_lim=30, orders=(1,1,2), col_scale=None):
     # NOTE: Partition search always uses fixed orders (1,1,2) for evaluation.
     # Order-aware search was tested and found to hurt when all orders are equal
     # (PPL 578 vs 369 for order=3 on Qwen3-0.6B) because the flatter error
@@ -35,6 +35,15 @@ def structural_searching(origin_matrix, up_lim=30, orders=(1,1,2)):
     minimal_value_0 = float('inf')
 
     true_counts = origin_matrix.abs().sum(dim=0)
+    # CRB_SALIENT_METRIC=actmag (2026-07-23): rescale ONLY the per-column
+    # salient RANKING score by the AWQ activation scale s_j, i.e. rank columns
+    # by s_j * sum_i |W_ij| instead of sum_i |W_ij|. The weights themselves are
+    # NOT modified: the salient-count error search and the bulk/tail split
+    # below still evaluate the raw origin_matrix. col_scale=None (every caller
+    # except the actmag path) leaves this function bit-identical to before.
+    if col_scale is not None:
+        true_counts = true_counts * col_scale.to(
+            device=true_counts.device, dtype=true_counts.dtype)
 
     error = []
     lines = []

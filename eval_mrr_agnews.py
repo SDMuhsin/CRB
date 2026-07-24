@@ -49,7 +49,7 @@ def opt_eval_mrr_agnews(model, model_name, dev, save_title='UNNAMED_OPT_MRR_AGNE
     tokenizer = get_tokenizer(model_name)
 
     # Load AG News test set (7,600 examples across 4 categories)
-    dataset = load_dataset("ag_news", split="test")
+    dataset = load_dataset("fancyzhx/ag_news", split="test")
 
     # Concatenate all test articles
     all_text = " ".join(example["text"] for example in dataset)

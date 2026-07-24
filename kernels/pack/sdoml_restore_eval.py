@@ -31,7 +31,7 @@ import os
 import sys
 import time
 
-REPO = "/workspace/BiLLM2"
+REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 VERIFY_DIR = os.path.join(REPO, "llmdocs", "cuda_kernel", "verify")
 
 # Must be set before run.py / csv_utils are imported (redirect the bench CSV so
@@ -177,6 +177,8 @@ def main_restore(args):
     sys.argv = build_run_argv(args.device, man.get("argv"))
     if args.eval_extra_ppl:
         sys.argv.append("--eval_extra_ppl")
+    if args.full_eval:
+        sys.argv.append("--full_eval")
     print("SDRESTORE: launching run.py:", sys.argv, flush=True)
     err = None
     try:
@@ -210,5 +212,9 @@ if __name__ == "__main__":
     ap.add_argument("--eval-extra-ppl", action="store_true",
                     help="also evaluate c4 + ptb PPL (passes --eval_extra_ppl "
                          "through to run.py)")
+    ap.add_argument("--full-eval", action="store_true",
+                    help="also evaluate MMLU 5-shot + HellaSwag/ARC-Easy/"
+                         "ARC-Challenge 0-shot (passes --full_eval through to "
+                         "run.py)")
     args = ap.parse_args()
     main_restore(args)

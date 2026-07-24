@@ -46,7 +46,7 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save as st_save, load as st_load
 
-REPO = "/workspace/BiLLM2"
+REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

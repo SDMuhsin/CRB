@@ -93,7 +93,7 @@ def eval_humaneval(model, model_name, dev, save_title='UNNAMED_HUMANEVAL'):
     tokenizer = get_tokenizer(model_name)
 
     # Load HumanEval dataset
-    dataset = load_dataset("openai_humaneval", split="test",
+    dataset = load_dataset("openai/openai_humaneval", split="test",
                            cache_dir="./downloads/datasets")
 
     # Enable cache for efficient autoregressive generation

@@ -312,6 +312,33 @@ def get_awq_subsets(block, model_type):
         ]
         return subsets
 
+    if model_type == 'olmo2':
+        # METHODOLOGICAL DEVIATION from the llama recipe, documented:
+        # Olmo2 is a norm-AFTER architecture — post_attention_layernorm /
+        # post_feedforward_layernorm are applied to sublayer OUTPUTS, so no
+        # LayerNorm/RMSNorm feeds q/k/v_proj or gate/up_proj (those linears
+        # read the raw residual stream, which AWQ cannot scale without
+        # changing the model function). We therefore keep ONLY the two
+        # Linear->Linear subsets (v_proj->o_proj and up_proj->down_proj)
+        # and skip the norm-fed qkv and gate/up subsets entirely.
+        subsets = [
+            {
+                'layers': {'self_attn.o_proj': block.self_attn.o_proj},
+                'prev_op': block.self_attn.v_proj,
+                'input_layer': 'self_attn.o_proj',
+                'inspect_module': block.self_attn.o_proj,
+                'has_kwargs': False,
+            },
+            {
+                'layers': {'mlp.down_proj': block.mlp.down_proj},
+                'prev_op': block.mlp.up_proj,
+                'input_layer': 'mlp.down_proj',
+                'inspect_module': block.mlp.down_proj,
+                'has_kwargs': False,
+            },
+        ]
+        return subsets
+
     if model_type == 'opt':
         subsets = [
             {
@@ -571,6 +598,8 @@ def detect_model_type(model):
         return 'opt'
     elif 'llama' in class_name:
         return 'llama'
+    elif 'olmo2' in class_name:
+        return 'olmo2'
     elif 'qwen' in class_name:
         return 'qwen'
     raise ValueError(f"Unknown model class: {model.__class__.__name__}")
@@ -586,7 +615,7 @@ def get_blocks_and_kwargs(model, dev, trainloader, nsamples, seqlen):
         model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(dev)
         if hasattr(model.model.decoder, 'project_in') and model.model.decoder.project_in:
             model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
-    elif model_type in ('llama', 'qwen'):
+    elif model_type in ('llama', 'qwen', 'olmo2'):
         layers = model.model.layers
         model.model.embed_tokens = model.model.embed_tokens.to(dev)
         if hasattr(model.model, 'rotary_emb'):
@@ -632,7 +661,7 @@ def get_blocks_and_kwargs(model, dev, trainloader, nsamples, seqlen):
         model.model.decoder.embed_positions = model.model.decoder.embed_positions.cpu()
         if hasattr(model.model.decoder, 'project_in') and model.model.decoder.project_in:
             model.model.decoder.project_in = model.model.decoder.project_in.cpu()
-    elif model_type in ('llama', 'qwen'):
+    elif model_type in ('llama', 'qwen', 'olmo2'):
         model.model.embed_tokens = model.model.embed_tokens.cpu()
         if hasattr(model.model, 'rotary_emb'):
             model.model.rotary_emb = model.model.rotary_emb.cpu()
@@ -1018,13 +1047,24 @@ def get_model(model_name):
             use_safetensors=True, attn_implementation="eager",
         )
         model.seqlen = model.config.max_position_embeddings
-    elif "llama" in model_name.lower():
+    elif "llama" in model_name.lower() or "falcon" in model_name.lower() or "helium" in model_name.lower() or "smollm" in model_name.lower():
+        # Falcon3 / Helium-1 / SmolLM2 are LlamaForCausalLM checkpoints.
         from transformers import LlamaForCausalLM
         model = LlamaForCausalLM.from_pretrained(
             model_name, torch_dtype="auto", cache_dir=downloads_dir,
             use_safetensors=True, attn_implementation="eager",
         )
         model.seqlen = 2048
+    elif "olmo" in model_name.lower():
+        # Olmo2ForCausalLM (e.g. allenai/OLMo-2-0425-1B).
+        # OLMo-2 checkpoints are stored fp32; load in bf16 to match every
+        # other model family processed by this runner.
+        from transformers import AutoModelForCausalLM
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=torch.bfloat16, cache_dir=downloads_dir,
+            use_safetensors=True, attn_implementation="eager",
+        )
+        model.seqlen = min(model.config.max_position_embeddings, 2048)
     elif "qwen" in model_name.lower():
         from transformers import AutoModelForCausalLM
         model = AutoModelForCausalLM.from_pretrained(

@@ -51,9 +51,13 @@ def get_tokenizer(model_name):
     return tokenizer
 
 def get_wikitext2(nsamples, seed, seqlen, model, tokenizer):
-    
-    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
-    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+
+    # 'Salesforce/wikitext' is the namespaced form of the bare id 'wikitext'.
+    # huggingface_hub >= 1.0 (required by transformers 5.x) rejects bare
+    # canonical dataset ids with HfUriError "Repository id must be
+    # 'namespace/name'". Same repo, same revision — the Hub simply redirects.
+    traindata = load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1', split='train')
+    testdata = load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1', split='test')
 
     trainenc = tokenizer(" ".join(traindata['text']), return_tensors='pt')
     testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')

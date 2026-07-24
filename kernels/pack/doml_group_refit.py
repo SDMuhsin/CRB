@@ -94,7 +94,7 @@ import os
 import sys
 import time
 
-REPO = "/workspace/BiLLM2"
+REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 VERIFY_DIR = os.path.join(REPO, "llmdocs", "cuda_kernel", "verify")
 
 # Must be set before run.py / csv_utils are imported (V1/K2-proven redirect).
@@ -116,6 +116,7 @@ import bigptq  # noqa: E402  (binds structural_guassian_distribution at import)
 from binary import lloyd_max_quantize, Binarization  # noqa: E402
 from binary import high_order_residual  # noqa: E402  (K2.6 column search)
 from utils.autosearch import structural_searching  # noqa: E402  (K2.6)
+from utils.structure import actmag_col_scale  # noqa: E402  (actmag saliency)
 from doml_dump import derive_dpk, container_meta  # noqa: E402  (K2 packer)
 
 B_BLOCK = 128
@@ -124,9 +125,17 @@ MODEL_NAME = DEFAULT_MODEL          # retargeted by set_model() (H17-A)
 
 
 def _run_argv(model_name):
+    # CRB research knob: salient-column selection metric
+    # (magnitude|hessian|actmag). Default 'magnitude' reproduces the baseline
+    # recipe exactly; CRB_SALIENT_METRIC=hessian selects salient columns by
+    # output/Hessian importance instead of |W| (fixed-bpw lever; recheck k29
+    # bpw after); CRB_SALIENT_METRIC=actmag ranks columns by s_j*sum|W_ij|
+    # with s = AWQ activation scale (computed, NOT applied — isolates AWQ's
+    # partition realignment from its value reshaping).
+    _salient = os.environ.get("CRB_SALIENT_METRIC", "magnitude")
     return [
         "run.py", model_name, "wikitext2", "doml",
-        "--blocksize", "128", "--salient_metric", "magnitude",
+        "--blocksize", "128", "--salient_metric", _salient,
         "--device", "cuda:0",
     ]
 
@@ -694,9 +703,20 @@ def _compute_block_masks(W, st, ed, Hinv, self_, orders, col_w_blk=None,
         masks, info = _column_block_masks(W[:, st:ed], Hinv[st:ed, st:ed],
                                           self_.salient_metric, orders)
     else:
-        m1b, m2b, m3b = bigptq.structural_guassian_distribution(
-            W[:, st:ed], Hinv[st:ed, st:ed], self_.salient_metric, 50,
-            orders=orders)
+        # CRB_SALIENT_METRIC=actmag: activation-scaled magnitude column
+        # RANKING (weights untouched). _cs is None unless the metric is
+        # "actmag" AND this linear carries a stashed AWQ scale; the legacy
+        # call stays byte-identical in that case (and keeps the K2 dump
+        # _sgd_wrapper — original signature — working).
+        _cs = actmag_col_scale(self_.layer, st, ed, self_.salient_metric)
+        if _cs is not None:
+            m1b, m2b, m3b = bigptq.structural_guassian_distribution(
+                W[:, st:ed], Hinv[st:ed, st:ed], self_.salient_metric, 50,
+                orders=orders, col_scale=_cs)
+        else:
+            m1b, m2b, m3b = bigptq.structural_guassian_distribution(
+                W[:, st:ed], Hinv[st:ed, st:ed], self_.salient_metric, 50,
+                orders=orders)
         if RUN_STATE.get("rd_split", None) is not None:
             # K32 --rd-split: K-aware RD sweep of the bulk/tail border
             # (mutually exclusive with --bulk-frac; argparse enforces it).
@@ -1227,6 +1247,26 @@ def main_run(args):
     threading.Thread(target=_watchdog, daemon=True).start()
 
     sys.argv = list(RUN_ARGV)
+    # Eval passthrough for the BUILD path (used by the mixed-precision probe:
+    # quantize in-memory with per-partition K>4, eval PPL+downstream directly,
+    # WITHOUT --dump-dir so the 2-plane DPK derive is skipped).
+    if args.eval_extra_ppl:
+        sys.argv.append("--eval_extra_ppl")
+    if args.full_eval:
+        sys.argv.append("--full_eval")
+    # AWQ: when building an AWQ dump (CRB_AWQ_ALPHA set) with a dump dir, tell
+    # run.py where to persist the per-layer activation scales so restore/btune/
+    # atune can re-apply the RMSNorm g <- g/s fold (the DPK dump stores only the
+    # quantized linears). Unset alpha -> byte-identical to before.
+    if args.dump_dir and os.environ.get('CRB_AWQ_ALPHA'):
+        os.environ['CRB_AWQ_SCALE_OUT'] = os.path.join(
+            args.dump_dir, 'awq_scales.safetensors')
+    # AWQ v2: the o_proj/down_proj folds land entirely in the dumped quantized
+    # linears, so this file is a build-time ANALYSIS artifact only — no
+    # restore/btune/atune path reads it (they key on awq_scales.safetensors).
+    if args.dump_dir and os.environ.get('CRB_AWQ_V2') == '1':
+        os.environ['CRB_AWQ_V2_SCALE_OUT'] = os.path.join(
+            args.dump_dir, 'awq_v2_scales.safetensors')
     print("K25REFIT: launching run.py:", sys.argv, flush=True)
     err = None
     try:
@@ -1251,6 +1291,9 @@ def main_run(args):
             "tag": tag,
             "gate_dir": args.gate_dir,
             "dump_dir": args.dump_dir,
+            "awq_alpha": (float(os.environ['CRB_AWQ_ALPHA'])
+                          if os.environ.get('CRB_AWQ_ALPHA') else None),
+            "awq_v2": os.environ.get('CRB_AWQ_V2') == '1',
             "n_sublayers_refit": RUN_STATE["n_refit_layers"],
             "expected_sublayers": EXPECTED_SUBLAYERS,
             "error": err,
@@ -1288,6 +1331,17 @@ def main_run(args):
 def main_restore(args):
     import glob
 
+    # AWQ: suppress the LIVE activation-scaling hook in run.py (run.py:~1259
+    # fires only when CRB_AWQ_ALPHA is set). On restore we re-apply the fold
+    # from the SAVED per-layer scales exactly ONCE (below), so the live hook
+    # must NOT also fire — otherwise the norm would get divided by s twice.
+    os.environ.pop('CRB_AWQ_ALPHA', None)
+    # AWQ v2: pop too (belt and braces — run.py's v2 hook also requires
+    # CRB_AWQ_ALPHA, popped above). The v2 folds live entirely inside the
+    # dumped quantized linears, so restore applies NO v2 fold whatsoever;
+    # awq_v2_scales.safetensors is analysis-only and is never loaded here.
+    os.environ.pop('CRB_AWQ_V2', None)
+
     dump_dir = os.path.abspath(args.restore_dpk)
     if not os.path.isdir(dump_dir):
         raise SystemExit(f"K33RESTORE FATAL: {dump_dir} is not a directory")
@@ -1307,6 +1361,19 @@ def main_restore(args):
         raise SystemExit(f"K33RESTORE FATAL: {n_wq} wq files != "
                          f"{EXPECTED_SUBLAYERS} expected sublayers")
     os.chdir(REPO)
+
+    # AWQ: if this dump was built with the activation-scaling transform it carries
+    # awq_scales.safetensors; load the per-layer scales so the RMSNorm g <- g/s
+    # fold (dropped from the linears-only DPK dump) can be re-applied to the
+    # assembled model just before eval. Absent file (every plain dump) -> None,
+    # and the restore path stays byte-identical to before.
+    _awq_scale_path = os.path.join(dump_dir, "awq_scales.safetensors")
+    _awq_scales = None
+    if os.path.exists(_awq_scale_path):
+        from awq_transform import load_scales
+        _awq_scales = load_scales(_awq_scale_path)
+        print(f"K33RESTORE: loaded AWQ scales for {len(_awq_scales)} layers "
+              f"from {_awq_scale_path}", flush=True)
 
     state = {"n": 0, "t0": time.time()}
 
@@ -1351,6 +1418,8 @@ def main_restore(args):
     import eval_utils
     _orig_eval = eval_utils.evaluate_and_log_all
 
+    _awq_fold = {"done": False}
+
     def _guarded_eval(*a, **kw):
         if state["n"] != EXPECTED_SUBLAYERS:
             print(f"K33RESTORE FATAL: eval reached with only {state['n']}/"
@@ -1359,6 +1428,26 @@ def main_restore(args):
             os._exit(3)
         print(f"K33RESTORE: all {state['n']}/{EXPECTED_SUBLAYERS} sublayers "
               f"restored — proceeding to the standard eval.", flush=True)
+        # AWQ: the restored linears are Quant(W.diag(s)); the RMSNorm weights
+        # were reloaded pristine (g). Fold g <- g/s ONCE, here, on the fully
+        # assembled model (a[0]) — NORM-ONLY (linears already correct). Guarded
+        # so a plain dump (no saved scales) is untouched, and the one-shot flag
+        # + the CRB_AWQ_ALPHA pop above guarantee the fold happens exactly once.
+        if _awq_scales is not None and not _awq_fold["done"]:
+            _model = a[0]
+            _layers = _model.model.layers
+            if len(_awq_scales) != len(_layers):
+                raise ValueError(
+                    f"K33RESTORE: awq scales has {len(_awq_scales)} entries but "
+                    f"model has {len(_layers)} layers")
+            for _li, _layer in enumerate(_layers):
+                for _key in ("input_layernorm", "post_attention_layernorm"):
+                    _s = _awq_scales[_li][_key]
+                    _w = getattr(_layer, _key).weight
+                    _w.data.div_(_s.to(dtype=_w.dtype, device=_w.device))
+            _awq_fold["done"] = True
+            print(f"K33RESTORE: applied AWQ RMSNorm g<-g/s fold on "
+                  f"{len(_layers)} layers.", flush=True)
         return _orig_eval(*a, **kw)
 
     eval_utils.evaluate_and_log_all = _guarded_eval
@@ -1378,6 +1467,8 @@ def main_restore(args):
     sys.argv = list(RUN_ARGV)
     if args.eval_extra_ppl:
         sys.argv.append("--eval_extra_ppl")
+    if args.full_eval:
+        sys.argv.append("--full_eval")
     print("K33RESTORE: launching run.py:", sys.argv, flush=True)
     err = None
     try:
@@ -1960,6 +2051,11 @@ if __name__ == "__main__":
                     help="restore mode only: pass --eval_extra_ppl through to "
                          "run.py (adds c4 + ptb PPL rows to the standard "
                          "wikitext2 eval). Default off.")
+    ap.add_argument("--full-eval", action="store_true",
+                    help="restore mode only: pass --full_eval through to "
+                         "run.py (adds MMLU 5-shot + HellaSwag/ARC-Easy/"
+                         "ARC-Challenge 0-shot downstream accuracy). Default "
+                         "off.")
     args = ap.parse_args()
     if args.restore_dpk:
         if not args.run:

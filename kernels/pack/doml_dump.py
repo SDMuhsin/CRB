@@ -57,7 +57,7 @@ import os
 import sys
 import time
 
-REPO = "/workspace/BiLLM2"
+REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DUMP_DIR = os.path.join(
     REPO, "downloads", "doml_dumps", "qwen3-0.6b", "sa-g128")
 VERIFY_DIR = os.path.join(REPO, "llmdocs", "cuda_kernel", "verify")

@@ -66,10 +66,11 @@ import argparse
 import copy
 import json
 import os
+import shutil
 import sys
 import time
 
-REPO = "/workspace/BiLLM2"
+REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -368,13 +369,24 @@ def retie_pads_fp8(cb_fp8_flat, n_real, R, NG):
     return f.view(FP8).contiguous()
 
 
-def tune_block(bi, block_fp, subs, x_q, target, kw, args, device, log):
+def tune_block(bi, block_fp, subs, x_q, target, kw, args, device, log,
+               awq_block_scales=None):
     """Tune block bi's 7 sublayers' levels; returns (final block with plain
     bf16 Linears, per-sublayer final fp8 cb [R,NG,3,4], stats dict)."""
     t0 = time.time()
     block_q = copy.deepcopy(block_fp).to(device)
     for p in block_q.parameters():
         p.requires_grad_(False)
+
+    # AWQ: for an AWQ-built dump the sublayer codebooks are Quant(W.diag(s)); the
+    # deepcopied RMSNorm weights are still pristine g. Fold g <- g/s on block_q's
+    # two norm groups so block_q reproduces block_fp's math (block_fp stays the
+    # PRISTINE output-preserving FP target — do NOT touch it). None -> no-op.
+    if awq_block_scales is not None:
+        for _key in ("input_layernorm", "post_attention_layernorm"):
+            _s = awq_block_scales[_key]
+            _w = getattr(block_q, _key).weight
+            _w.data.div_(_s.to(dtype=_w.dtype, device=_w.device))
 
     qlin = {}
     for name in SUBLAYER_NAMES:
@@ -617,6 +629,19 @@ def main():
     print(f"K31: loading model + calibration (standard run.py path)...",
           flush=True)
     model, dataloader = load_model_and_calib(device)
+
+    # AWQ: if the source dump carries awq_scales.safetensors, load the per-layer
+    # activation scales so the RMSNorm g <- g/s fold (dropped from the linears-
+    # only DPK dump) is re-applied inside tune_block. Absent -> None (plain dump,
+    # byte-identical behaviour).
+    awq_scales = None
+    _awq_scale_path = os.path.join(src_dir, "awq_scales.safetensors")
+    if os.path.exists(_awq_scale_path):
+        from awq_transform import load_scales
+        awq_scales = load_scales(_awq_scale_path)
+        print(f"K31: loaded AWQ scales for {len(awq_scales)} layers from "
+              f"{_awq_scale_path}", flush=True)
+
     inps, layer_kwargs = capture_block0_inputs(model, dataloader, device)
     layers = model.model.layers
     assert len(layers) == N_BLOCKS
@@ -647,7 +672,7 @@ def main():
 
         block_q, final_cb, _stats = tune_block(
             bi, block_fp, subs, x_q, target, layer_kwargs, args, device,
-            tune_log)
+            tune_log, awq_block_scales=(awq_scales[bi] if awq_scales else None))
 
         x_q = forward_stream(block_q, x_q, layer_kwargs)
         x_fp = target
@@ -688,6 +713,12 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     for lname, cb_new in all_final_cb.items():
         write_tuned_layer(out_dir, all_subs[lname], cb_new)
+    # AWQ: carry the per-layer scales forward so the tuned dump can still be
+    # restored/atuned with the g <- g/s fold. Absent -> nothing to copy.
+    if os.path.exists(_awq_scale_path):
+        shutil.copy2(_awq_scale_path,
+                     os.path.join(out_dir, "awq_scales.safetensors"))
+        print(f"K31: copied awq_scales.safetensors -> {out_dir}", flush=True)
     print(f"K31: wrote {len(all_final_cb)} tuned sublayers -> {out_dir}",
           flush=True)
 

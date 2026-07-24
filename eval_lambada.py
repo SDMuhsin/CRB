@@ -42,7 +42,7 @@ def opt_eval_lambada(model, model_name, dev, save_title='UNNAMED_OPT_LAMBADA'):
     from datautils import get_tokenizer
     tokenizer = get_tokenizer(model_name)
 
-    dataset = load_dataset("lambada", split="test")
+    dataset = load_dataset("cimec/lambada", split="test")
 
     use_cache = model.config.use_cache
     model.config.use_cache = False

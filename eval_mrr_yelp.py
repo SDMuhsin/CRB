@@ -48,7 +48,7 @@ def opt_eval_mrr_yelp(model, model_name, dev, save_title='UNNAMED_OPT_MRR_YELP')
     tokenizer = get_tokenizer(model_name)
 
     # Load Yelp Review Full test set (50,000 reviews across 5 star ratings)
-    dataset = load_dataset("yelp_review_full", split="test", cache_dir="./downloads/datasets")
+    dataset = load_dataset("Yelp/yelp_review_full", split="test", cache_dir="./downloads/datasets")
 
     # Concatenate all test reviews
     all_text = " ".join(example["text"] for example in dataset)

@@ -51,7 +51,7 @@ import math
 import io
 from contextlib import redirect_stdout
 
-REPO = "/workspace/BiLLM2"
+REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(REPO)
 sys.path.insert(0, REPO)
 sys.path.insert(0, os.path.join(REPO, "src"))

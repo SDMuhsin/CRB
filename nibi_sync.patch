@@ -1,0 +1,3722 @@
+diff --git a/bigptq.py b/bigptq.py
+index 03893f0..aef1914 100644
+--- a/bigptq.py
++++ b/bigptq.py
+@@ -5,6 +5,7 @@ import torch
+ import torch.nn as nn
+ import transformers
+ from utils.structure import structural_guassian_distribution
++from utils.structure import actmag_col_scale  # CRB_SALIENT_METRIC=actmag
+ 
+ DEBUG = False
+ 
+@@ -139,7 +140,17 @@ class BRAGPTQ:
+                 # No structural partition — single all-ones mask (for DOML, etc.)
+                 mask[0] = torch.ones_like(W[:, st:ed], dtype=torch.bool)
+             else:
+-                mask1, mask2, mask3 = structural_guassian_distribution(W[:, st:ed], H[st:ed, st:ed], self.salient_metric, 50, orders=orders)
++                # CRB_SALIENT_METRIC=actmag: activation-scaled magnitude column
++                # RANKING (weights untouched). _cs is None unless the metric is
++                # "actmag" AND this linear carries a stashed AWQ scale, and the
++                # legacy call below stays byte-identical in that case (also
++                # keeps dump-mode monkeypatch wrappers with the original
++                # signature working).
++                _cs = actmag_col_scale(self.layer, st, ed, self.salient_metric)
++                if _cs is not None:
++                    mask1, mask2, mask3 = structural_guassian_distribution(W[:, st:ed], H[st:ed, st:ed], self.salient_metric, 50, orders=orders, col_scale=_cs)
++                else:
++                    mask1, mask2, mask3 = structural_guassian_distribution(W[:, st:ed], H[st:ed, st:ed], self.salient_metric, 50, orders=orders)
+                 mask[0] = mask1
+                 mask[1] = mask2
+                 mask[2] = mask3
+diff --git a/datautils.py b/datautils.py
+index ab9ab5e..f405ae0 100644
+--- a/datautils.py
++++ b/datautils.py
+@@ -51,9 +51,13 @@ def get_tokenizer(model_name):
+     return tokenizer
+ 
+ def get_wikitext2(nsamples, seed, seqlen, model, tokenizer):
+-    
+-    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+-    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
++
++    # 'Salesforce/wikitext' is the namespaced form of the bare id 'wikitext'.
++    # huggingface_hub >= 1.0 (required by transformers 5.x) rejects bare
++    # canonical dataset ids with HfUriError "Repository id must be
++    # 'namespace/name'". Same repo, same revision — the Hub simply redirects.
++    traindata = load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1', split='train')
++    testdata = load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1', split='test')
+ 
+     trainenc = tokenizer(" ".join(traindata['text']), return_tensors='pt')
+     testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')
+diff --git a/eval_humaneval.py b/eval_humaneval.py
+index cd42f0a..1e55c9b 100644
+--- a/eval_humaneval.py
++++ b/eval_humaneval.py
+@@ -93,7 +93,7 @@ def eval_humaneval(model, model_name, dev, save_title='UNNAMED_HUMANEVAL'):
+     tokenizer = get_tokenizer(model_name)
+ 
+     # Load HumanEval dataset
+-    dataset = load_dataset("openai_humaneval", split="test",
++    dataset = load_dataset("openai/openai_humaneval", split="test",
+                            cache_dir="./downloads/datasets")
+ 
+     # Enable cache for efficient autoregressive generation
+diff --git a/eval_lambada.py b/eval_lambada.py
+index e24f4d4..3dd8faa 100644
+--- a/eval_lambada.py
++++ b/eval_lambada.py
+@@ -42,7 +42,7 @@ def opt_eval_lambada(model, model_name, dev, save_title='UNNAMED_OPT_LAMBADA'):
+     from datautils import get_tokenizer
+     tokenizer = get_tokenizer(model_name)
+ 
+-    dataset = load_dataset("lambada", split="test")
++    dataset = load_dataset("cimec/lambada", split="test")
+ 
+     use_cache = model.config.use_cache
+     model.config.use_cache = False
+diff --git a/eval_mrr.py b/eval_mrr.py
+index 67f0e01..8ab42c7 100644
+--- a/eval_mrr.py
++++ b/eval_mrr.py
+@@ -43,12 +43,15 @@ def opt_eval_mrr(model, model_name, dev, save_title='UNNAMED_OPT_MRR'):
+     """
+     print("Evaluating MRR on PTB test set ...")
+ 
+-    from datautils import get_tokenizer
++    from datautils import get_tokenizer, _ptb_load_split
+     tokenizer = get_tokenizer(model_name)
+ 
+-    # Load PTB test set
+-    testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test')
+-    testenc = tokenizer(" ".join(testdata['sentence']), return_tensors='pt')
++    # Load PTB test set. The HF `ptb_text_only` repo is script-only and
++    # datasets >= 4 dropped script loaders, so go through datautils'
++    # loader, which reads the canonical Mikolov splits as raw text
++    # (identical sentences after .strip()).
++    sentences = _ptb_load_split('test')
++    testenc = tokenizer(" ".join(sentences), return_tensors='pt')
+     test_ids = testenc.input_ids  # [1, total_tokens]
+ 
+     seqlen = model.seqlen
+diff --git a/eval_mrr_agnews.py b/eval_mrr_agnews.py
+index 23c9226..a783de6 100644
+--- a/eval_mrr_agnews.py
++++ b/eval_mrr_agnews.py
+@@ -49,7 +49,7 @@ def opt_eval_mrr_agnews(model, model_name, dev, save_title='UNNAMED_OPT_MRR_AGNE
+     tokenizer = get_tokenizer(model_name)
+ 
+     # Load AG News test set (7,600 examples across 4 categories)
+-    dataset = load_dataset("ag_news", split="test")
++    dataset = load_dataset("fancyzhx/ag_news", split="test")
+ 
+     # Concatenate all test articles
+     all_text = " ".join(example["text"] for example in dataset)
+diff --git a/eval_mrr_imdb.py b/eval_mrr_imdb.py
+index 85e0230..f3d6636 100644
+--- a/eval_mrr_imdb.py
++++ b/eval_mrr_imdb.py
+@@ -47,7 +47,7 @@ def opt_eval_mrr_imdb(model, model_name, dev, save_title='UNNAMED_OPT_MRR_IMDB')
+     tokenizer = get_tokenizer(model_name)
+ 
+     # Load IMDB test set (25,000 movie reviews)
+-    dataset = load_dataset("imdb", split="test", cache_dir="./downloads/datasets")
++    dataset = load_dataset("stanfordnlp/imdb", split="test", cache_dir="./downloads/datasets")
+ 
+     # Concatenate all test reviews
+     all_text = " ".join(example["text"] for example in dataset)
+diff --git a/eval_mrr_yelp.py b/eval_mrr_yelp.py
+index 5d60e4e..5970dd9 100644
+--- a/eval_mrr_yelp.py
++++ b/eval_mrr_yelp.py
+@@ -48,7 +48,7 @@ def opt_eval_mrr_yelp(model, model_name, dev, save_title='UNNAMED_OPT_MRR_YELP')
+     tokenizer = get_tokenizer(model_name)
+ 
+     # Load Yelp Review Full test set (50,000 reviews across 5 star ratings)
+-    dataset = load_dataset("yelp_review_full", split="test", cache_dir="./downloads/datasets")
++    dataset = load_dataset("Yelp/yelp_review_full", split="test", cache_dir="./downloads/datasets")
+ 
+     # Concatenate all test reviews
+     all_text = " ".join(example["text"] for example in dataset)
+diff --git a/kernels/pack/awq_transform.py b/kernels/pack/awq_transform.py
+new file mode 100644
+index 0000000..93dd292
+--- /dev/null
++++ b/kernels/pack/awq_transform.py
+@@ -0,0 +1,710 @@
++"""AWQ / SmoothQuant-style per-channel activation-scaling transform.
++
++This is a *reparametrization* of the full-precision (FP) model that is applied
++BEFORE DOML (or any other) weight quantization.  It migrates a positive
++per-input-channel scale ``s`` (length = in_features) from the activations into
++the weights of the linears that consume an RMSNorm output, while dividing the
++feeding RMSNorm weight by the same ``s``:
++
++    W  <-  W . diag(s)      (scale the weight COLUMNS / in_features axis)
++    g  <-  g / s            (scale the RMSNorm weight elementwise)
++
++For a linear ``Y = W . RMSNorm_g(h)`` this is *exactly* output-preserving on the
++FP model, because RMSNorm's output channel ``j`` is ``g_j * normalized(h)_j`` and
++
++    (W . diag(s)) . RMSNorm_{g/s}(h)
++        = sum_j W[:,j] * s_j * (g_j / s_j) * normalized(h)_j
++        = sum_j W[:,j] * g_j * normalized(h)_j
++        = W . RMSNorm_g(h).
++
++The RMS *denominator* depends only on ``h`` (not on ``g``), so scaling ``g`` does
++not change it.  AWQ picks ``s`` to protect high-activation channels:
++
++    s_j = a_j ** alpha,   a_j = mean_tokens |RMSNorm_output_j|,
++
++then normalizes ``s`` so its geometric mean is 1 (``s /= s.prod()**(1/len(s))``,
++computed stably in log-space so the transform folds entirely into the existing
++RMSNorm weight -> ZERO extra stored parameters -> bpw unchanged).
++
++Scope (v1): only the two RMSNorm-fed scale groups per decoder layer:
++    input_layernorm           -> shared input of {q_proj, k_proj, v_proj}
++    post_attention_layernorm   -> shared input of {gate_proj, up_proj}
++o_proj / down_proj are intentionally NOT touched (their scale group folds into
++linear *rows* with GQA head-mapping complications).  Qwen3's per-head
++``q_norm`` / ``k_norm`` act on the head dimension *after* q/k projection and are
++irrelevant to input scaling, so they are left alone.
++
++Works for both Llama (``LlamaForCausalLM``) and Qwen3 (``Qwen3ForCausalLM``):
++both expose ``model.model.layers[i].{self_attn.{q,k,v,o}_proj,
++mlp.{gate,up,down}_proj, input_layernorm, post_attention_layernorm}``.  GQA
++(``num_key_value_heads < num_attention_heads``) only shrinks the *out_features*
++of k/v_proj; the *in_features* (columns we scale) equal hidden_size for all of
++q/k/v, so a single shared ``s`` of length hidden_size applies cleanly.
++"""
++
++import os
++import argparse
++
++import torch
++import torch.nn as nn
++from safetensors import safe_open
++from safetensors.torch import save_file
++
++
++# ---------------------------------------------------------------------------
++# Model-structure helpers (Llama / Qwen3 share the same layout)
++# ---------------------------------------------------------------------------
++def _get_decoder_layers(model):
++    """Return the ModuleList of decoder layers for a Llama/Qwen3 CausalLM."""
++    return model.model.layers
++
++
++# Each entry: (rmsnorm_attr_name, [linear_module_accessors]).  The linears all
++# consume the *output* of the named RMSNorm, so they share one scale vector.
++def _layer_scale_groups(layer):
++    """Return the in-scope (norm_name, [linear_modules]) groups for one layer."""
++    return [
++        (
++            "input_layernorm",
++            [layer.self_attn.q_proj, layer.self_attn.k_proj, layer.self_attn.v_proj],
++        ),
++        (
++            "post_attention_layernorm",
++            [layer.mlp.gate_proj, layer.mlp.up_proj],
++        ),
++    ]
++
++
++_GROUP_KEYS = ("input_layernorm", "post_attention_layernorm")
++
++
++# ---------------------------------------------------------------------------
++# Scale computation
++# ---------------------------------------------------------------------------
++def _awq_scale_from_activation(a, alpha):
++    """s_j = a_j**alpha, normalized so the geometric mean of s is 1.
++
++    Computed in log-space for numerical stability:
++        log s = alpha * log a ;  log s -= mean(log s) ;  s = exp(log s)
++    which is exactly ``s = a**alpha / (a**alpha).prod()**(1/n)``.
++    """
++    a = a.to(torch.float32)
++    log_a = torch.log(a.clamp_min(1e-8))
++    log_s = alpha * log_a
++    log_s = log_s - log_s.mean()            # geometric-mean normalization
++    return torch.exp(log_s)
++
++
++def _as_id_batches(calib_input_ids):
++    """Normalize assorted calibration containers into a list of 2D LongTensors.
++
++    Accepts:
++      * a single tensor of shape (T,) or (N, T);
++      * an iterable of tensors, each (T,) or (B, T);
++      * an iterable of ``(input_ids, target)`` tuples (the repo's dataloader
++        format from ``datautils.get_loaders``) -> uses element 0.
++    A (N, T) tensor is split into N single-row batches so the forward memory
++    footprint matches the quantization pipeline (batch size 1).
++    """
++    if isinstance(calib_input_ids, torch.Tensor):
++        t = calib_input_ids
++        if t.dim() == 1:
++            return [t.unsqueeze(0)]
++        return [t[i : i + 1] for i in range(t.shape[0])]
++
++    batches = []
++    for item in calib_input_ids:
++        inp = item[0] if isinstance(item, (tuple, list)) else item
++        if not isinstance(inp, torch.Tensor):
++            inp = torch.as_tensor(inp)
++        batches.append(inp if inp.dim() >= 2 else inp.unsqueeze(0))
++    return batches
++
++
++@torch.no_grad()
++def collect_awq_scales(model, calib_input_ids, alpha=0.5, device="cuda:0"):
++    """Accumulate per-channel mean(|RMSNorm output|) over the calibration tokens
++    and turn it into an AWQ scale vector per (layer, norm-group).
++
++    Forward hooks on every layer's ``input_layernorm`` and
++    ``post_attention_layernorm`` record ``sum(|output|)`` over all tokens; the
++    running total is divided by the token count to get ``a_j``.
++
++    Returns: ``list`` (one dict per decoder layer) of
++        ``{"input_layernorm": s_vec, "post_attention_layernorm": s_vec}``,
++    each ``s_vec`` a float32 tensor (length = in_features) with geometric mean 1.
++    """
++    layers = _get_decoder_layers(model)
++    n_layers = len(layers)
++
++    # Per-layer per-norm running sum of |activation| over tokens (float32).
++    acc = [{k: None for k in _GROUP_KEYS} for _ in range(n_layers)]
++
++    def make_hook(li, key):
++        def hook(module, inp, out):
++            o = out.detach()
++            o = o.reshape(-1, o.shape[-1]).to(torch.float32).abs().sum(dim=0)
++            if acc[li][key] is None:
++                acc[li][key] = o
++            else:
++                acc[li][key] += o
++        return hook
++
++    handles = []
++    for li, layer in enumerate(layers):
++        for key in _GROUP_KEYS:
++            handles.append(getattr(layer, key).register_forward_hook(make_hook(li, key)))
++
++    batches = _as_id_batches(calib_input_ids)
++
++    was_training = model.training
++    model.eval()
++    use_cache = getattr(model.config, "use_cache", None)
++    model.config.use_cache = False
++
++    total_tokens = 0
++    try:
++        for b in batches:
++            b = b.to(device)
++            if b.dim() == 1:
++                b = b.unsqueeze(0)
++            model(b)
++            total_tokens += b.shape[0] * b.shape[1]
++    finally:
++        for h in handles:
++            h.remove()
++        if use_cache is not None:
++            model.config.use_cache = use_cache
++        if was_training:
++            model.train()
++
++    denom = max(total_tokens, 1)
++    scales = []
++    for li in range(n_layers):
++        d = {}
++        for key in _GROUP_KEYS:
++            a = acc[li][key] / denom                    # mean |activation| per channel
++            d[key] = _awq_scale_from_activation(a, alpha)
++        scales.append(d)
++    return scales
++
++
++# ---------------------------------------------------------------------------
++# Transform application (in-place, output-preserving)
++# ---------------------------------------------------------------------------
++@torch.no_grad()
++def apply_awq_(model, scales):
++    """Apply the column-scaling + norm-division transform IN PLACE.
++
++    For each in-scope group: ``W_col_j *= s_j`` for every consuming linear and
++    ``g_j /= s_j`` for the feeding RMSNorm.  No tensor is created or deleted, so
++    the stored parameter count / bpw is unchanged.
++    """
++    layers = _get_decoder_layers(model)
++    if len(scales) != len(layers):
++        raise ValueError(f"scales has {len(scales)} entries but model has {len(layers)} layers")
++
++    for li, layer in enumerate(layers):
++        for key, linears in _layer_scale_groups(layer):
++            s = scales[li][key]
++            norm = getattr(layer, key)
++            in_features = linears[0].weight.shape[1]
++            if s.numel() != in_features:
++                raise ValueError(
++                    f"layer {li} {key}: scale length {s.numel()} != in_features {in_features}")
++            if s.numel() != norm.weight.numel():
++                raise ValueError(
++                    f"layer {li} {key}: scale length {s.numel()} != norm weight {norm.weight.numel()}")
++
++            for lin in linears:
++                # W <- W . diag(s): scale columns (in_features axis).
++                s_w = s.to(dtype=lin.weight.dtype, device=lin.weight.device)
++                lin.weight.data.mul_(s_w.unsqueeze(0))     # (out,in) *= (1,in)
++
++            # g <- g / s: fold the inverse scale into the RMSNorm weight.
++            s_n = s.to(dtype=norm.weight.dtype, device=norm.weight.device)
++            norm.weight.data.div_(s_n)
++    return model
++
++
++@torch.no_grad()
++def apply_awq_from_calib(model, calib_input_ids, alpha=0.5, device="cuda:0"):
++    """Convenience: collect AWQ scales from ``calib_input_ids`` then apply them.
++
++    The model is temporarily moved to ``device`` for the forward passes if it is
++    not already there, and restored to its original device afterwards (so a
++    downstream layer-by-layer quantizer that expects the model on CPU is
++    unaffected).
++
++    Returns the ``scales`` list (one dict per decoder layer) so the caller can
++    persist it (via ``save_scales``); the model itself is transformed in place.
++    """
++    orig_device = next(model.parameters()).device
++    moved = str(orig_device) != str(device)
++    if moved:
++        model.to(device)
++    try:
++        scales = collect_awq_scales(model, calib_input_ids, alpha=alpha, device=device)
++        apply_awq_(model, scales)
++    finally:
++        if moved:
++            model.to(orig_device)
++    return scales
++
++
++# ---------------------------------------------------------------------------
++# CRB_SALIENT_METRIC=actmag support (2026-07-23): compute the AWQ scales but
++# do NOT apply the W <- W.diag(s) / g <- g/s transform. The scales are stashed
++# on the covered linear modules as a plain attribute so DOML's salient-column
++# search (utils/structure.py metric "actmag") can rank columns by
++# s_j * sum_i |W_ij| while the quantizer still sees the UNMODIFIED weights.
++# This isolates AWQ's partition-realignment effect from its value reshaping.
++# ---------------------------------------------------------------------------
++@torch.no_grad()
++def collect_scales_from_calib(model, calib_input_ids, alpha=0.5, device="cuda:0"):
++    """Exactly :func:`apply_awq_from_calib` minus the ``apply_awq_`` step:
++    run the calibration forward pass, return the per-layer scales list
++    (same structure/math), leave every weight and norm untouched."""
++    orig_device = next(model.parameters()).device
++    moved = str(orig_device) != str(device)
++    if moved:
++        model.to(device)
++    try:
++        scales = collect_awq_scales(model, calib_input_ids, alpha=alpha, device=device)
++    finally:
++        if moved:
++            model.to(orig_device)
++    return scales
++
++
++@torch.no_grad()
++def attach_selection_scales(model, scales, attr="_crb_actmag_s"):
++    """Stash each covered linear's per-in-feature scale vector on the module
++    as a PLAIN attribute (not a Parameter, not a buffer: it is invisible to
++    state_dict/save/bpw accounting and is not moved by ``.to()`` — readers
++    must ``.to()`` it themselves). Scope = the AWQ v1 norm groups
++    (input_layernorm -> q/k/v, post_attention_layernorm -> gate/up); o_proj
++    and down_proj get NO stash, so the selection code falls back to the plain
++    magnitude score for them.
++
++    Returns ``(n_covered, n_fallback)`` linear counts for logging."""
++    layers = _get_decoder_layers(model)
++    if len(scales) != len(layers):
++        raise ValueError(
++            f"scales has {len(scales)} entries but model has {len(layers)} layers")
++    n_covered = 0
++    n_fallback = 0
++    for li, layer in enumerate(layers):
++        for key, linears in _layer_scale_groups(layer):
++            s = scales[li][key].detach().to(torch.float32).cpu().contiguous()
++            for lin in linears:
++                if s.numel() != lin.weight.shape[1]:
++                    raise ValueError(
++                        f"layer {li} {key}: scale length {s.numel()} != "
++                        f"in_features {lin.weight.shape[1]}")
++                setattr(lin, attr, s)
++                n_covered += 1
++        # v1 scope: these quantized linears are intentionally uncovered.
++        n_fallback += 2                      # o_proj + down_proj
++    return n_covered, n_fallback
++
++
++# ---------------------------------------------------------------------------
++# Scale persistence (needed because the AWQ transform folds the inverse scale
++# into the RMSNorm weights, which the DPK dump — quantized LINEARS only — does
++# NOT store; restore/btune/atune load a pristine FP model and must re-apply the
++# ``g <- g/s`` fold from the saved ``s``).
++# ---------------------------------------------------------------------------
++def save_scales(scales, path):
++    """Serialize the AWQ ``scales`` list to a safetensors file at ``path``.
++
++    ``scales`` is a list (one dict per decoder layer) of
++        ``{"input_layernorm": s_vec, "post_attention_layernorm": s_vec}``.
++    Keys are written as ``L{li}.input_layernorm`` / ``L{li}.post_attention_layernorm``
++    with each vector stored as float32 (length = hidden_size)."""
++    tensors = {}
++    for li, d in enumerate(scales):
++        for key in _GROUP_KEYS:
++            tensors[f"L{li}.{key}"] = d[key].detach().to(torch.float32).cpu().contiguous()
++    parent = os.path.dirname(os.path.abspath(path))
++    os.makedirs(parent, exist_ok=True)
++    save_file(tensors, path)
++    return path
++
++
++def load_scales(path):
++    """Inverse of :func:`save_scales`: return the same list-of-dicts structure.
++
++    The decoder-layer count is inferred from the ``L{li}.*`` key prefixes."""
++    tensors = {}
++    with safe_open(path, framework="pt", device="cpu") as f:
++        for k in f.keys():
++            tensors[k] = f.get_tensor(k)
++    n_layers = 0
++    for k in tensors:
++        li = int(k.split(".", 1)[0][1:])       # "L{li}.<key>" -> li
++        n_layers = max(n_layers, li + 1)
++    scales = []
++    for li in range(n_layers):
++        scales.append({key: tensors[f"L{li}.{key}"] for key in _GROUP_KEYS})
++    return scales
++
++
++# ---------------------------------------------------------------------------
++# AWQ v2 (2026-07-24, opt-in via CRB_AWQ_V2=1 on top of CRB_AWQ_ALPHA):
++# extend the activation scaling to the two per-layer linears v1 skips,
++# o_proj and down_proj.  Unlike v1 the inverse fold does NOT go into an
++# RMSNorm weight — it goes into the *rows* (out_features) of another
++# QUANTIZED linear in the same block, BEFORE quantization:
++#
++#   down_proj:  a_j = mean|input col j|  (the SwiGLU output silu(g) ⊙ u).
++#               W_down <- W_down . diag(s);  up_proj rows <- rows / s.
++#               Exact because (silu(g) ⊙ u) / s = silu(g) ⊙ (u / s):
++#               dividing ONLY up_proj's output rows by s divides down_proj's
++#               input elementwise by s (gate untouched).
++#
++#   o_proj:     a_j = mean|input col j|  (concatenated attention head
++#               outputs).  GQA: o_proj input columns [h*hd:(h+1)*hd) for
++#               query-head h are produced by v-head h // n_rep
++#               (n_rep = num_attention_heads // num_key_value_heads, HF
++#               repeat_kv layout: query head h = kv*n_rep + r).  The inverse
++#               fold lands in v_proj's output rows, shared across the n_rep
++#               query heads, so the scale MUST be tied: pool a_j by MEAN over
++#               the n_rep replicas of the same v-head column (keep per-column
++#               within head_dim), s_pooled = pooled**alpha geo-mean-
++#               normalized; o_proj col (h, d) uses s_pooled[h//n_rep, d];
++#               v_proj row (kv, d) <- / s_pooled[kv, d].  The attention mix
++#               out_h = A_h @ v_(h//n_rep) is linear in v, so scaling v rows
++#               by 1/s scales o_proj input cols by 1/s exactly — output-
++#               preserving for ANY attention weights.
++#
++# Both folds live entirely in quantized linears (o/down scaled, v/up
++# inverse-scaled) inside one transformer block, so the DPK dump captures
++# everything: restore/btune/atune need NO v2 fold (block_fp remains a valid
++# pristine target — block outputs are preserved).  v2 scales are saved to a
++# separate awq_v2_scales.safetensors for ANALYSIS ONLY; the restore-time
++# norm fold (awq_scales.safetensors) stays v1-only.
++# ---------------------------------------------------------------------------
++_V2_GROUP_KEYS = ("o_proj", "down_proj")
++_V2_SAVE_KEYS = ("o_proj", "o_proj_pooled", "down_proj")
++
++
++def _gqa_dims(model):
++    """(n_heads, n_kv_heads, head_dim, n_rep) from the HF config.
++
++    ``head_dim`` prefers the explicit config field (Qwen3-1.7B: 128) and
++    falls back to hidden_size // num_attention_heads (Llama)."""
++    cfg = model.config
++    n_heads = int(cfg.num_attention_heads)
++    n_kv = int(getattr(cfg, "num_key_value_heads", None) or n_heads)
++    head_dim = int(getattr(cfg, "head_dim", None)
++                   or (cfg.hidden_size // n_heads))
++    if n_heads % n_kv != 0:
++        raise ValueError(
++            f"num_attention_heads {n_heads} not divisible by "
++            f"num_key_value_heads {n_kv}")
++    return n_heads, n_kv, head_dim, n_heads // n_kv
++
++
++def _v2_o_proj_scales(a, alpha, n_heads, n_kv, head_dim):
++    """GQA-tied o_proj scale from mean-|input| ``a`` (length n_heads*head_dim).
++
++    Pool ``a`` by MEAN over the n_rep query-head replicas of each v-head
++    (reshape (n_kv, n_rep, head_dim) — valid because HF repeat_kv orders
++    query head h = kv*n_rep + r), keep per-column within head_dim, then
++    s_pooled = pooled**alpha geo-mean-normalized over the (n_kv*head_dim)
++    group.  Returns ``(s_full, s_pooled_flat)`` where s_full[(h, d)] =
++    s_pooled[h//n_rep, d] (length n_heads*head_dim; its geometric mean is
++    also 1 since each pooled entry appears exactly n_rep times)."""
++    n_rep = n_heads // n_kv
++    a = a.to(torch.float32).reshape(n_kv, n_rep, head_dim)
++    a_pooled = a.mean(dim=1)                              # (n_kv, head_dim)
++    s_pooled = _awq_scale_from_activation(a_pooled.reshape(-1), alpha)
++    s_pooled = s_pooled.reshape(n_kv, head_dim)
++    s_full = (s_pooled.unsqueeze(1)
++              .expand(n_kv, n_rep, head_dim)
++              .reshape(n_heads * head_dim)
++              .contiguous())
++    return s_full, s_pooled.reshape(-1).contiguous()
++
++
++@torch.no_grad()
++def _v2_apply_group_(scaled_lin, inv_lin, s_cols, s_rows):
++    """One v2 fold IN PLACE: ``scaled_lin`` W <- W.diag(s_cols) (columns /
++    in_features axis); ``inv_lin`` output rows (and bias, if any) <- /s_rows.
++    Exact output-preservation requires s_cols to be the row-scale s_rows
++    broadcast onto scaled_lin's input columns (identity for down/up)."""
++    if s_cols.numel() != scaled_lin.weight.shape[1]:
++        raise ValueError(
++            f"v2 col-scale length {s_cols.numel()} != in_features "
++            f"{scaled_lin.weight.shape[1]}")
++    if s_rows.numel() != inv_lin.weight.shape[0]:
++        raise ValueError(
++            f"v2 row-scale length {s_rows.numel()} != out_features "
++            f"{inv_lin.weight.shape[0]}")
++    sc = s_cols.to(dtype=scaled_lin.weight.dtype,
++                   device=scaled_lin.weight.device)
++    scaled_lin.weight.data.mul_(sc.unsqueeze(0))          # (out,in) *= (1,in)
++    sr = s_rows.to(dtype=inv_lin.weight.dtype, device=inv_lin.weight.device)
++    inv_lin.weight.data.div_(sr.unsqueeze(1))             # (out,in) /= (out,1)
++    if inv_lin.bias is not None:                          # bias adds per-row
++        inv_lin.bias.data.div_(sr.to(dtype=inv_lin.bias.dtype,
++                                     device=inv_lin.bias.device))
++
++
++@torch.no_grad()
++def collect_awq_v2_scales(model, calib_input_ids, alpha=0.5, device="cuda:0"):
++    """Accumulate per-channel mean|INPUT col j| of every layer's o_proj and
++    down_proj over the calibration tokens (forward hooks reading ``inp[0]``)
++    and turn it into the v2 scale vectors.
++
++    Returns a list (one dict per decoder layer) of
++        ``{"o_proj": s_full, "o_proj_pooled": s_pooled, "down_proj": s}``
++    (float32; s_full length n_heads*head_dim, s_pooled length
++    n_kv_heads*head_dim, down length intermediate_size)."""
++    layers = _get_decoder_layers(model)
++    n_layers = len(layers)
++    n_heads, n_kv, head_dim, n_rep = _gqa_dims(model)
++
++    acc = [{k: None for k in _V2_GROUP_KEYS} for _ in range(n_layers)]
++
++    def make_hook(li, key):
++        def hook(module, inp, out):
++            x = inp[0].detach()
++            x = x.reshape(-1, x.shape[-1]).to(torch.float32).abs().sum(dim=0)
++            if acc[li][key] is None:
++                acc[li][key] = x
++            else:
++                acc[li][key] += x
++        return hook
++
++    handles = []
++    for li, layer in enumerate(layers):
++        handles.append(layer.self_attn.o_proj.register_forward_hook(
++            make_hook(li, "o_proj")))
++        handles.append(layer.mlp.down_proj.register_forward_hook(
++            make_hook(li, "down_proj")))
++
++    batches = _as_id_batches(calib_input_ids)
++
++    was_training = model.training
++    model.eval()
++    use_cache = getattr(model.config, "use_cache", None)
++    model.config.use_cache = False
++
++    total_tokens = 0
++    try:
++        for b in batches:
++            b = b.to(device)
++            if b.dim() == 1:
++                b = b.unsqueeze(0)
++            model(b)
++            total_tokens += b.shape[0] * b.shape[1]
++    finally:
++        for h in handles:
++            h.remove()
++        if use_cache is not None:
++            model.config.use_cache = use_cache
++        if was_training:
++            model.train()
++
++    denom = max(total_tokens, 1)
++    scales = []
++    for li in range(n_layers):
++        a_o = acc[li]["o_proj"] / denom
++        if a_o.numel() != n_heads * head_dim:
++            raise ValueError(
++                f"layer {li}: o_proj in_features {a_o.numel()} != "
++                f"n_heads*head_dim {n_heads * head_dim}")
++        s_full, s_pooled = _v2_o_proj_scales(a_o, alpha, n_heads, n_kv,
++                                             head_dim)
++        a_d = acc[li]["down_proj"] / denom
++        scales.append({
++            "o_proj": s_full,
++            "o_proj_pooled": s_pooled,
++            "down_proj": _awq_scale_from_activation(a_d, alpha),
++        })
++    return scales
++
++
++@torch.no_grad()
++def apply_awq_v2_(model, scales):
++    """Apply the v2 folds IN PLACE (o_proj/down_proj cols *= s, v_proj/up_proj
++    rows /= s).  Returns the number of folded groups (2 per decoder layer)."""
++    layers = _get_decoder_layers(model)
++    if len(scales) != len(layers):
++        raise ValueError(
++            f"v2 scales has {len(scales)} entries but model has "
++            f"{len(layers)} layers")
++    n_groups = 0
++    for li, layer in enumerate(layers):
++        d = scales[li]
++        _v2_apply_group_(layer.self_attn.o_proj, layer.self_attn.v_proj,
++                         d["o_proj"], d["o_proj_pooled"])
++        n_groups += 1
++        _v2_apply_group_(layer.mlp.down_proj, layer.mlp.up_proj,
++                         d["down_proj"], d["down_proj"])
++        n_groups += 1
++    return n_groups
++
++
++@torch.no_grad()
++def apply_awq_v2_from_calib(model, calib_input_ids, alpha=0.5,
++                            device="cuda:0"):
++    """Collect the v2 scales from a calibration forward pass (run on the
++    CURRENT — i.e. already-v1-transformed, if v1 is active — model, so the
++    stats match what will be quantized) then fold them in place.
++
++    Returns ``(scales, meta)`` where meta carries the GQA mapping actually
++    used (n_heads / n_kv_heads / head_dim / n_rep) and n_groups folded."""
++    orig_device = next(model.parameters()).device
++    moved = str(orig_device) != str(device)
++    if moved:
++        model.to(device)
++    try:
++        scales = collect_awq_v2_scales(model, calib_input_ids, alpha=alpha,
++                                       device=device)
++        n_groups = apply_awq_v2_(model, scales)
++    finally:
++        if moved:
++            model.to(orig_device)
++    n_heads, n_kv, head_dim, n_rep = _gqa_dims(model)
++    meta = {"n_groups": n_groups, "n_heads": n_heads, "n_kv_heads": n_kv,
++            "head_dim": head_dim, "n_rep": n_rep}
++    return scales, meta
++
++
++def save_v2_scales(scales, path):
++    """Serialize the v2 ``scales`` list to safetensors at ``path`` (keys
++    ``L{li}.o_proj`` / ``L{li}.o_proj_pooled`` / ``L{li}.down_proj``).
++    BUILD-TIME ANALYSIS ARTIFACT ONLY: the v2 folds are fully captured by the
++    dumped quantized linears, so no restore/btune/atune path may ever apply
++    these (they all key on the v1-only awq_scales.safetensors filename)."""
++    tensors = {}
++    for li, d in enumerate(scales):
++        for key in _V2_SAVE_KEYS:
++            tensors[f"L{li}.{key}"] = (
++                d[key].detach().to(torch.float32).cpu().contiguous())
++    parent = os.path.dirname(os.path.abspath(path))
++    os.makedirs(parent, exist_ok=True)
++    save_file(tensors, path)
++    return path
++
++
++def load_v2_scales(path):
++    """Inverse of :func:`save_v2_scales` (analysis only — never folded)."""
++    tensors = {}
++    with safe_open(path, framework="pt", device="cpu") as f:
++        for k in f.keys():
++            tensors[k] = f.get_tensor(k)
++    n_layers = 0
++    for k in tensors:
++        li = int(k.split(".", 1)[0][1:])
++        n_layers = max(n_layers, li + 1)
++    return [{key: tensors[f"L{li}.{key}"] for key in _V2_SAVE_KEYS}
++            for li in range(n_layers)]
++
++
++# ---------------------------------------------------------------------------
++# --selftest CLI: proves output-preservation on the FP model
++# ---------------------------------------------------------------------------
++def _load_fp_model(model_name, device):
++    """Load the FP model exactly like run.py:get_model (eager attn, safetensors,
++    torch_dtype='auto'), reusing the repo loader when importable."""
++    import sys
++    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++    if repo_root not in sys.path:
++        sys.path.insert(0, repo_root)
++    from run import get_model                 # same loader the repo uses
++    model = get_model(model_name)
++    model.eval()
++    return model
++
++
++def _get_calib_dataloader(model_name, model, nsamples, seed=0):
++    import sys
++    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++    if repo_root not in sys.path:
++        sys.path.insert(0, repo_root)
++    from datautils import get_loaders        # same wikitext2 calibration path
++    dataloader, _ = get_loaders(
++        "wikitext2", nsamples=nsamples, seed=seed,
++        model=model_name, seqlen=model.seqlen,
++    )
++    return dataloader
++
++
++def _param_signature(model):
++    """(#parameter tensors, total numel, #state_dict tensors) — must be
++    invariant under the AWQ transform (bpw-neutral: no new stored tensors)."""
++    n_param_tensors = sum(1 for _ in model.parameters())
++    total_numel = sum(p.numel() for p in model.parameters())
++    n_state = len(model.state_dict())
++    return n_param_tensors, total_numel, n_state
++
++
++def _selftest(model_name, alpha, device):
++    print(f"\n=== AWQ selftest: {model_name}  alpha={alpha}  device={device} ===")
++    model = _load_fp_model(model_name, device)
++
++    # The transform is exactly output-preserving in real arithmetic; run the
++    # gate in float32 so the numbers reflect the *math* (a bf16 store of the
++    # reparametrized weights adds ~2^-8 rounding that is irrelevant once DOML
++    # quantizes to ~2 bits, but would otherwise mask the correctness proof).
++    orig_dtype = next(model.parameters()).dtype
++    model = model.to(device=device, dtype=torch.float32)
++
++    dataloader = _get_calib_dataloader(model_name, model, nsamples=16)
++    calib = dataloader[:8]                    # calibration subset
++    eval_batch = dataloader[12][0].to(device) # held-out sequence for the gate
++
++    sig_before = _param_signature(model)
++
++    with torch.no_grad():
++        logits_before = model(eval_batch).logits.float().clone()
++
++    apply_awq_from_calib(model, calib, alpha=alpha, device=device)
++
++    with torch.no_grad():
++        logits_after = model(eval_batch).logits.float().clone()
++
++    sig_after = _param_signature(model)
++
++    diff = (logits_after - logits_before).abs()
++    max_abs = diff.max().item()
++    denom = logits_before.abs().max().item()
++    max_rel = max_abs / denom if denom > 0 else float("inf")
++
++    print(f"  native dtype (loader)      : {orig_dtype}")
++    print(f"  logits shape               : {tuple(logits_before.shape)}")
++    print(f"  max |after-before|         : {max_abs:.3e}")
++    print(f"  max |before|               : {denom:.3e}")
++    print(f"  max relative error         : {max_rel:.3e}   (gate < 1e-3)")
++    print(f"  param signature before     : {sig_before}")
++    print(f"  param signature after      : {sig_after}")
++
++    assert sig_before == sig_after, (
++        f"parameter/state signature changed: {sig_before} -> {sig_after}")
++    assert max_rel < 1e-3, f"relative error {max_rel:.3e} not < 1e-3"
++    print(f"  RESULT                     : PASS (output-preserving, bpw-neutral)")
++    return max_abs, max_rel
++
++
++def main():
++    parser = argparse.ArgumentParser(description="AWQ activation-scaling transform")
++    parser.add_argument("--selftest", metavar="MODEL", type=str, default=None,
++                        help="Model id to run the output-preservation gate on "
++                             "(e.g. Qwen/Qwen3-0.6B, meta-llama/Llama-3.2-1B).")
++    parser.add_argument("--alpha", type=float, default=0.5,
++                        help="AWQ scaling exponent s_j = a_j**alpha (default 0.5).")
++    parser.add_argument("--device", type=str, default="cuda:0")
++    args = parser.parse_args()
++
++    if args.selftest:
++        _selftest(args.selftest, args.alpha, args.device)
++    else:
++        parser.print_help()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/kernels/pack/doml_dump.py b/kernels/pack/doml_dump.py
+index 7dea2ff..80e1920 100644
+--- a/kernels/pack/doml_dump.py
++++ b/kernels/pack/doml_dump.py
+@@ -57,7 +57,7 @@ import os
+ import sys
+ import time
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ DEFAULT_DUMP_DIR = os.path.join(
+     REPO, "downloads", "doml_dumps", "qwen3-0.6b", "sa-g128")
+ VERIFY_DIR = os.path.join(REPO, "llmdocs", "cuda_kernel", "verify")
+diff --git a/kernels/pack/doml_group_refit.py b/kernels/pack/doml_group_refit.py
+index 3eac29f..536252e 100644
+--- a/kernels/pack/doml_group_refit.py
++++ b/kernels/pack/doml_group_refit.py
+@@ -94,7 +94,7 @@ import os
+ import sys
+ import time
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ VERIFY_DIR = os.path.join(REPO, "llmdocs", "cuda_kernel", "verify")
+ 
+ # Must be set before run.py / csv_utils are imported (V1/K2-proven redirect).
+@@ -116,6 +116,7 @@ import bigptq  # noqa: E402  (binds structural_guassian_distribution at import)
+ from binary import lloyd_max_quantize, Binarization  # noqa: E402
+ from binary import high_order_residual  # noqa: E402  (K2.6 column search)
+ from utils.autosearch import structural_searching  # noqa: E402  (K2.6)
++from utils.structure import actmag_col_scale  # noqa: E402  (actmag saliency)
+ from doml_dump import derive_dpk, container_meta  # noqa: E402  (K2 packer)
+ 
+ B_BLOCK = 128
+@@ -124,9 +125,17 @@ MODEL_NAME = DEFAULT_MODEL          # retargeted by set_model() (H17-A)
+ 
+ 
+ def _run_argv(model_name):
++    # CRB research knob: salient-column selection metric
++    # (magnitude|hessian|actmag). Default 'magnitude' reproduces the baseline
++    # recipe exactly; CRB_SALIENT_METRIC=hessian selects salient columns by
++    # output/Hessian importance instead of |W| (fixed-bpw lever; recheck k29
++    # bpw after); CRB_SALIENT_METRIC=actmag ranks columns by s_j*sum|W_ij|
++    # with s = AWQ activation scale (computed, NOT applied — isolates AWQ's
++    # partition realignment from its value reshaping).
++    _salient = os.environ.get("CRB_SALIENT_METRIC", "magnitude")
+     return [
+         "run.py", model_name, "wikitext2", "doml",
+-        "--blocksize", "128", "--salient_metric", "magnitude",
++        "--blocksize", "128", "--salient_metric", _salient,
+         "--device", "cuda:0",
+     ]
+ 
+@@ -694,9 +703,20 @@ def _compute_block_masks(W, st, ed, Hinv, self_, orders, col_w_blk=None,
+         masks, info = _column_block_masks(W[:, st:ed], Hinv[st:ed, st:ed],
+                                           self_.salient_metric, orders)
+     else:
+-        m1b, m2b, m3b = bigptq.structural_guassian_distribution(
+-            W[:, st:ed], Hinv[st:ed, st:ed], self_.salient_metric, 50,
+-            orders=orders)
++        # CRB_SALIENT_METRIC=actmag: activation-scaled magnitude column
++        # RANKING (weights untouched). _cs is None unless the metric is
++        # "actmag" AND this linear carries a stashed AWQ scale; the legacy
++        # call stays byte-identical in that case (and keeps the K2 dump
++        # _sgd_wrapper — original signature — working).
++        _cs = actmag_col_scale(self_.layer, st, ed, self_.salient_metric)
++        if _cs is not None:
++            m1b, m2b, m3b = bigptq.structural_guassian_distribution(
++                W[:, st:ed], Hinv[st:ed, st:ed], self_.salient_metric, 50,
++                orders=orders, col_scale=_cs)
++        else:
++            m1b, m2b, m3b = bigptq.structural_guassian_distribution(
++                W[:, st:ed], Hinv[st:ed, st:ed], self_.salient_metric, 50,
++                orders=orders)
+         if RUN_STATE.get("rd_split", None) is not None:
+             # K32 --rd-split: K-aware RD sweep of the bulk/tail border
+             # (mutually exclusive with --bulk-frac; argparse enforces it).
+@@ -1227,6 +1247,26 @@ def main_run(args):
+     threading.Thread(target=_watchdog, daemon=True).start()
+ 
+     sys.argv = list(RUN_ARGV)
++    # Eval passthrough for the BUILD path (used by the mixed-precision probe:
++    # quantize in-memory with per-partition K>4, eval PPL+downstream directly,
++    # WITHOUT --dump-dir so the 2-plane DPK derive is skipped).
++    if args.eval_extra_ppl:
++        sys.argv.append("--eval_extra_ppl")
++    if args.full_eval:
++        sys.argv.append("--full_eval")
++    # AWQ: when building an AWQ dump (CRB_AWQ_ALPHA set) with a dump dir, tell
++    # run.py where to persist the per-layer activation scales so restore/btune/
++    # atune can re-apply the RMSNorm g <- g/s fold (the DPK dump stores only the
++    # quantized linears). Unset alpha -> byte-identical to before.
++    if args.dump_dir and os.environ.get('CRB_AWQ_ALPHA'):
++        os.environ['CRB_AWQ_SCALE_OUT'] = os.path.join(
++            args.dump_dir, 'awq_scales.safetensors')
++    # AWQ v2: the o_proj/down_proj folds land entirely in the dumped quantized
++    # linears, so this file is a build-time ANALYSIS artifact only — no
++    # restore/btune/atune path reads it (they key on awq_scales.safetensors).
++    if args.dump_dir and os.environ.get('CRB_AWQ_V2') == '1':
++        os.environ['CRB_AWQ_V2_SCALE_OUT'] = os.path.join(
++            args.dump_dir, 'awq_v2_scales.safetensors')
+     print("K25REFIT: launching run.py:", sys.argv, flush=True)
+     err = None
+     try:
+@@ -1251,6 +1291,9 @@ def main_run(args):
+             "tag": tag,
+             "gate_dir": args.gate_dir,
+             "dump_dir": args.dump_dir,
++            "awq_alpha": (float(os.environ['CRB_AWQ_ALPHA'])
++                          if os.environ.get('CRB_AWQ_ALPHA') else None),
++            "awq_v2": os.environ.get('CRB_AWQ_V2') == '1',
+             "n_sublayers_refit": RUN_STATE["n_refit_layers"],
+             "expected_sublayers": EXPECTED_SUBLAYERS,
+             "error": err,
+@@ -1288,6 +1331,17 @@ def main_run(args):
+ def main_restore(args):
+     import glob
+ 
++    # AWQ: suppress the LIVE activation-scaling hook in run.py (run.py:~1259
++    # fires only when CRB_AWQ_ALPHA is set). On restore we re-apply the fold
++    # from the SAVED per-layer scales exactly ONCE (below), so the live hook
++    # must NOT also fire — otherwise the norm would get divided by s twice.
++    os.environ.pop('CRB_AWQ_ALPHA', None)
++    # AWQ v2: pop too (belt and braces — run.py's v2 hook also requires
++    # CRB_AWQ_ALPHA, popped above). The v2 folds live entirely inside the
++    # dumped quantized linears, so restore applies NO v2 fold whatsoever;
++    # awq_v2_scales.safetensors is analysis-only and is never loaded here.
++    os.environ.pop('CRB_AWQ_V2', None)
++
+     dump_dir = os.path.abspath(args.restore_dpk)
+     if not os.path.isdir(dump_dir):
+         raise SystemExit(f"K33RESTORE FATAL: {dump_dir} is not a directory")
+@@ -1308,6 +1362,19 @@ def main_restore(args):
+                          f"{EXPECTED_SUBLAYERS} expected sublayers")
+     os.chdir(REPO)
+ 
++    # AWQ: if this dump was built with the activation-scaling transform it carries
++    # awq_scales.safetensors; load the per-layer scales so the RMSNorm g <- g/s
++    # fold (dropped from the linears-only DPK dump) can be re-applied to the
++    # assembled model just before eval. Absent file (every plain dump) -> None,
++    # and the restore path stays byte-identical to before.
++    _awq_scale_path = os.path.join(dump_dir, "awq_scales.safetensors")
++    _awq_scales = None
++    if os.path.exists(_awq_scale_path):
++        from awq_transform import load_scales
++        _awq_scales = load_scales(_awq_scale_path)
++        print(f"K33RESTORE: loaded AWQ scales for {len(_awq_scales)} layers "
++              f"from {_awq_scale_path}", flush=True)
++
+     state = {"n": 0, "t0": time.time()}
+ 
+     def restore_fasterquant(self, blocksize=128, percdamp=0.01, partition=3,
+@@ -1351,6 +1418,8 @@ def main_restore(args):
+     import eval_utils
+     _orig_eval = eval_utils.evaluate_and_log_all
+ 
++    _awq_fold = {"done": False}
++
+     def _guarded_eval(*a, **kw):
+         if state["n"] != EXPECTED_SUBLAYERS:
+             print(f"K33RESTORE FATAL: eval reached with only {state['n']}/"
+@@ -1359,6 +1428,26 @@ def main_restore(args):
+             os._exit(3)
+         print(f"K33RESTORE: all {state['n']}/{EXPECTED_SUBLAYERS} sublayers "
+               f"restored — proceeding to the standard eval.", flush=True)
++        # AWQ: the restored linears are Quant(W.diag(s)); the RMSNorm weights
++        # were reloaded pristine (g). Fold g <- g/s ONCE, here, on the fully
++        # assembled model (a[0]) — NORM-ONLY (linears already correct). Guarded
++        # so a plain dump (no saved scales) is untouched, and the one-shot flag
++        # + the CRB_AWQ_ALPHA pop above guarantee the fold happens exactly once.
++        if _awq_scales is not None and not _awq_fold["done"]:
++            _model = a[0]
++            _layers = _model.model.layers
++            if len(_awq_scales) != len(_layers):
++                raise ValueError(
++                    f"K33RESTORE: awq scales has {len(_awq_scales)} entries but "
++                    f"model has {len(_layers)} layers")
++            for _li, _layer in enumerate(_layers):
++                for _key in ("input_layernorm", "post_attention_layernorm"):
++                    _s = _awq_scales[_li][_key]
++                    _w = getattr(_layer, _key).weight
++                    _w.data.div_(_s.to(dtype=_w.dtype, device=_w.device))
++            _awq_fold["done"] = True
++            print(f"K33RESTORE: applied AWQ RMSNorm g<-g/s fold on "
++                  f"{len(_layers)} layers.", flush=True)
+         return _orig_eval(*a, **kw)
+ 
+     eval_utils.evaluate_and_log_all = _guarded_eval
+@@ -1378,6 +1467,8 @@ def main_restore(args):
+     sys.argv = list(RUN_ARGV)
+     if args.eval_extra_ppl:
+         sys.argv.append("--eval_extra_ppl")
++    if args.full_eval:
++        sys.argv.append("--full_eval")
+     print("K33RESTORE: launching run.py:", sys.argv, flush=True)
+     err = None
+     try:
+@@ -1960,6 +2051,11 @@ if __name__ == "__main__":
+                     help="restore mode only: pass --eval_extra_ppl through to "
+                          "run.py (adds c4 + ptb PPL rows to the standard "
+                          "wikitext2 eval). Default off.")
++    ap.add_argument("--full-eval", action="store_true",
++                    help="restore mode only: pass --full_eval through to "
++                         "run.py (adds MMLU 5-shot + HellaSwag/ARC-Easy/"
++                         "ARC-Challenge 0-shot downstream accuracy). Default "
++                         "off.")
+     args = ap.parse_args()
+     if args.restore_dpk:
+         if not args.run:
+diff --git a/kernels/pack/k31_assign_tune.py b/kernels/pack/k31_assign_tune.py
+index d5f3a25..09bbc0e 100644
+--- a/kernels/pack/k31_assign_tune.py
++++ b/kernels/pack/k31_assign_tune.py
+@@ -61,10 +61,11 @@ import glob
+ import json
+ import math
+ import os
++import shutil
+ import sys
+ import time
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ if REPO not in sys.path:
+     sys.path.insert(0, REPO)
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+@@ -320,7 +321,7 @@ def lr_factor(step, total, floor=0.1):
+ 
+ 
+ def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
+-                      device, log):
++                      device, log, awq_block_scales=None):
+     """Returns (final frozen block, {name: cb fp8 [R,NG,3,4] cpu},
+     {name: committed codes uint8 [R,C_orig] cpu}, stats)."""
+     t0 = time.time()
+@@ -328,6 +329,16 @@ def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
+     for p in block_q.parameters():
+         p.requires_grad_(False)
+ 
++    # AWQ: the sublayer codebooks are Quant(W.diag(s)); the deepcopied RMSNorm
++    # weights are still pristine g. Fold g <- g/s on block_q's two norm groups so
++    # block_q matches block_fp's math (block_fp stays the PRISTINE FP target — do
++    # NOT touch it). None -> no-op (plain dump, unchanged).
++    if awq_block_scales is not None:
++        for _key in ("input_layernorm", "post_attention_layernorm"):
++            _s = awq_block_scales[_key]
++            _w = getattr(block_q, _key).weight
++            _w.data.div_(_s.to(dtype=_w.dtype, device=_w.device))
++
+     qlin = {}
+     for name in SUBLAYER_NAMES:
+         parent = block_q
+@@ -748,6 +759,18 @@ def main():
+     print("K31A: loading model + calibration (standard run.py path)...",
+           flush=True)
+     model, dataloader = kbt.load_model_and_calib(device)
++
++    # AWQ: if the source (btuned) dump carries awq_scales.safetensors, load the
++    # per-layer scales so the RMSNorm g <- g/s fold is re-applied in
++    # tune_block_assign. Absent -> None (plain dump, byte-identical behaviour).
++    awq_scales = None
++    _awq_scale_path = os.path.join(src_dir, "awq_scales.safetensors")
++    if os.path.exists(_awq_scale_path):
++        from awq_transform import load_scales
++        awq_scales = load_scales(_awq_scale_path)
++        print(f"K31A: loaded AWQ scales for {len(awq_scales)} layers from "
++              f"{_awq_scale_path}", flush=True)
++
+     inps, layer_kwargs = kbt.capture_block0_inputs(model, dataloader, device)
+     layers = model.model.layers
+     assert len(layers) == N_BLOCKS
+@@ -775,7 +798,8 @@ def main():
+         target = kbt.forward_stream(block_fp, x_fp, layer_kwargs)
+         block_q, final_cb, codes_new, _stats = tune_block_assign(
+             bi, block_fp, subs, nreals, x_q, target, layer_kwargs, args,
+-            device, tune_log)
++            device, tune_log,
++            awq_block_scales=(awq_scales[bi] if awq_scales else None))
+         x_q = kbt.forward_stream(block_q, x_q, layer_kwargs)
+         x_fp = target
+         for name in SUBLAYER_NAMES:
+@@ -819,6 +843,12 @@ def main():
+     for lname in all_final_cb:
+         write_assign_layer(out_dir, all_subs[lname], all_final_cb[lname],
+                            all_codes[lname])
++    # AWQ: carry the per-layer scales forward so the atuned dump can still be
++    # restored with the g <- g/s fold. Absent -> nothing to copy.
++    if os.path.exists(_awq_scale_path):
++        shutil.copy2(_awq_scale_path,
++                     os.path.join(out_dir, "awq_scales.safetensors"))
++        print(f"K31A: copied awq_scales.safetensors -> {out_dir}", flush=True)
+     print(f"K31A: wrote {len(all_final_cb)} tuned sublayers -> {out_dir}",
+           flush=True)
+ 
+diff --git a/kernels/pack/k31_block_tune.py b/kernels/pack/k31_block_tune.py
+index beed345..3402c5d 100644
+--- a/kernels/pack/k31_block_tune.py
++++ b/kernels/pack/k31_block_tune.py
+@@ -66,10 +66,11 @@ import argparse
+ import copy
+ import json
+ import os
++import shutil
+ import sys
+ import time
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ if REPO not in sys.path:
+     sys.path.insert(0, REPO)
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+@@ -368,7 +369,8 @@ def retie_pads_fp8(cb_fp8_flat, n_real, R, NG):
+     return f.view(FP8).contiguous()
+ 
+ 
+-def tune_block(bi, block_fp, subs, x_q, target, kw, args, device, log):
++def tune_block(bi, block_fp, subs, x_q, target, kw, args, device, log,
++               awq_block_scales=None):
+     """Tune block bi's 7 sublayers' levels; returns (final block with plain
+     bf16 Linears, per-sublayer final fp8 cb [R,NG,3,4], stats dict)."""
+     t0 = time.time()
+@@ -376,6 +378,16 @@ def tune_block(bi, block_fp, subs, x_q, target, kw, args, device, log):
+     for p in block_q.parameters():
+         p.requires_grad_(False)
+ 
++    # AWQ: for an AWQ-built dump the sublayer codebooks are Quant(W.diag(s)); the
++    # deepcopied RMSNorm weights are still pristine g. Fold g <- g/s on block_q's
++    # two norm groups so block_q reproduces block_fp's math (block_fp stays the
++    # PRISTINE output-preserving FP target — do NOT touch it). None -> no-op.
++    if awq_block_scales is not None:
++        for _key in ("input_layernorm", "post_attention_layernorm"):
++            _s = awq_block_scales[_key]
++            _w = getattr(block_q, _key).weight
++            _w.data.div_(_s.to(dtype=_w.dtype, device=_w.device))
++
+     qlin = {}
+     for name in SUBLAYER_NAMES:
+         parent = block_q
+@@ -617,6 +629,19 @@ def main():
+     print(f"K31: loading model + calibration (standard run.py path)...",
+           flush=True)
+     model, dataloader = load_model_and_calib(device)
++
++    # AWQ: if the source dump carries awq_scales.safetensors, load the per-layer
++    # activation scales so the RMSNorm g <- g/s fold (dropped from the linears-
++    # only DPK dump) is re-applied inside tune_block. Absent -> None (plain dump,
++    # byte-identical behaviour).
++    awq_scales = None
++    _awq_scale_path = os.path.join(src_dir, "awq_scales.safetensors")
++    if os.path.exists(_awq_scale_path):
++        from awq_transform import load_scales
++        awq_scales = load_scales(_awq_scale_path)
++        print(f"K31: loaded AWQ scales for {len(awq_scales)} layers from "
++              f"{_awq_scale_path}", flush=True)
++
+     inps, layer_kwargs = capture_block0_inputs(model, dataloader, device)
+     layers = model.model.layers
+     assert len(layers) == N_BLOCKS
+@@ -647,7 +672,7 @@ def main():
+ 
+         block_q, final_cb, _stats = tune_block(
+             bi, block_fp, subs, x_q, target, layer_kwargs, args, device,
+-            tune_log)
++            tune_log, awq_block_scales=(awq_scales[bi] if awq_scales else None))
+ 
+         x_q = forward_stream(block_q, x_q, layer_kwargs)
+         x_fp = target
+@@ -688,6 +713,12 @@ def main():
+     os.makedirs(out_dir, exist_ok=True)
+     for lname, cb_new in all_final_cb.items():
+         write_tuned_layer(out_dir, all_subs[lname], cb_new)
++    # AWQ: carry the per-layer scales forward so the tuned dump can still be
++    # restored/atuned with the g <- g/s fold. Absent -> nothing to copy.
++    if os.path.exists(_awq_scale_path):
++        shutil.copy2(_awq_scale_path,
++                     os.path.join(out_dir, "awq_scales.safetensors"))
++        print(f"K31: copied awq_scales.safetensors -> {out_dir}", flush=True)
+     print(f"K31: wrote {len(all_final_cb)} tuned sublayers -> {out_dir}",
+           flush=True)
+ 
+diff --git a/kernels/pack/rd_probe.py b/kernels/pack/rd_probe.py
+index c80c032..6f939a2 100644
+--- a/kernels/pack/rd_probe.py
++++ b/kernels/pack/rd_probe.py
+@@ -51,7 +51,7 @@ import math
+ import io
+ from contextlib import redirect_stdout
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ os.chdir(REPO)
+ sys.path.insert(0, REPO)
+ sys.path.insert(0, os.path.join(REPO, "src"))
+diff --git a/kernels/pack/sdoml_assign_tune.py b/kernels/pack/sdoml_assign_tune.py
+index c5b42da..bf354cc 100644
+--- a/kernels/pack/sdoml_assign_tune.py
++++ b/kernels/pack/sdoml_assign_tune.py
+@@ -69,7 +69,7 @@ import os
+ import sys
+ import time
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ if REPO not in sys.path:
+     sys.path.insert(0, REPO)
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+diff --git a/kernels/pack/sdoml_block_tune.py b/kernels/pack/sdoml_block_tune.py
+index a8dcdb1..9962448 100644
+--- a/kernels/pack/sdoml_block_tune.py
++++ b/kernels/pack/sdoml_block_tune.py
+@@ -70,7 +70,7 @@ import os
+ import sys
+ import time
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ if REPO not in sys.path:
+     sys.path.insert(0, REPO)
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+diff --git a/kernels/pack/sdoml_dump.py b/kernels/pack/sdoml_dump.py
+index 6aba352..2c1c3d8 100644
+--- a/kernels/pack/sdoml_dump.py
++++ b/kernels/pack/sdoml_dump.py
+@@ -56,7 +56,7 @@ import os
+ import sys
+ import time
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ DEFAULT_DUMP_DIR = os.path.join(
+     REPO, "downloads", "doml_dumps", "qwen3-0.6b", "sdoml-s50")
+ VERIFY_DIR = os.path.join(REPO, "llmdocs", "cuda_kernel", "verify")
+diff --git a/kernels/pack/sdoml_group_refit.py b/kernels/pack/sdoml_group_refit.py
+index daf078f..6b8e764 100644
+--- a/kernels/pack/sdoml_group_refit.py
++++ b/kernels/pack/sdoml_group_refit.py
+@@ -58,7 +58,7 @@ import os
+ import sys
+ import time
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ if REPO not in sys.path:
+     sys.path.insert(0, REPO)
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+diff --git a/kernels/pack/sdoml_honest_bpw.py b/kernels/pack/sdoml_honest_bpw.py
+index 7b7bb37..9d8197e 100644
+--- a/kernels/pack/sdoml_honest_bpw.py
++++ b/kernels/pack/sdoml_honest_bpw.py
+@@ -46,7 +46,7 @@ import torch
+ from safetensors import safe_open
+ from safetensors.torch import save as st_save, load as st_load
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ if REPO not in sys.path:
+     sys.path.insert(0, REPO)
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+diff --git a/kernels/pack/sdoml_restore_eval.py b/kernels/pack/sdoml_restore_eval.py
+index 11214d3..51548b7 100644
+--- a/kernels/pack/sdoml_restore_eval.py
++++ b/kernels/pack/sdoml_restore_eval.py
+@@ -31,7 +31,7 @@ import os
+ import sys
+ import time
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ VERIFY_DIR = os.path.join(REPO, "llmdocs", "cuda_kernel", "verify")
+ 
+ # Must be set before run.py / csv_utils are imported (redirect the bench CSV so
+@@ -177,6 +177,8 @@ def main_restore(args):
+     sys.argv = build_run_argv(args.device, man.get("argv"))
+     if args.eval_extra_ppl:
+         sys.argv.append("--eval_extra_ppl")
++    if args.full_eval:
++        sys.argv.append("--full_eval")
+     print("SDRESTORE: launching run.py:", sys.argv, flush=True)
+     err = None
+     try:
+@@ -210,5 +212,9 @@ if __name__ == "__main__":
+     ap.add_argument("--eval-extra-ppl", action="store_true",
+                     help="also evaluate c4 + ptb PPL (passes --eval_extra_ppl "
+                          "through to run.py)")
++    ap.add_argument("--full-eval", action="store_true",
++                    help="also evaluate MMLU 5-shot + HellaSwag/ARC-Easy/"
++                         "ARC-Challenge 0-shot (passes --full_eval through to "
++                         "run.py)")
+     args = ap.parse_args()
+     main_restore(args)
+diff --git a/kernels/serve/serve_common.py b/kernels/serve/serve_common.py
+index 6457682..056a29d 100644
+--- a/kernels/serve/serve_common.py
++++ b/kernels/serve/serve_common.py
+@@ -28,7 +28,7 @@ import sys
+ import torch
+ import torch.nn as nn
+ 
+-REPO = "/workspace/BiLLM2"
++REPO = os.environ.get("CRB_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ if REPO not in sys.path:
+     sys.path.insert(0, REPO)
+ 
+diff --git a/llmdocs/NIBI_SUBMISSION.md b/llmdocs/NIBI_SUBMISSION.md
+new file mode 100644
+index 0000000..a1d0c12
+--- /dev/null
++++ b/llmdocs/NIBI_SUBMISSION.md
+@@ -0,0 +1,168 @@
++# Nibi submission package — SDOML sweep + new-model benchmarks (2026-07-24)
++
++Prepared on the dev box (platogpu007, no `sbatch` here — nothing was or could
++be submitted from this box). Everything below runs on a **Nibi login node**.
++
++Payloads:
++
++1. **SDOML sparsity sweep** (`sbatch/run_sdoml_sweep.sh`, new) — fills every
++   missing SDOML cell of `tab:sparse` / `tab:bpw_sparse`
++   (tracker `llmdocs/tracker/RERUN_2026-07-22_paper_doml_sdoml.md` §D):
++   s ∈ {5,20,25,40,50,75} on Qwen3-1.7B AND Llama-3.2-1B via the full honest
++   container chain (dump → honest bpw → block-tune fp8 → assign-tune pair →
++   honest bpw → restore + full eval), plus SDOML+partition asymmetric
++   s ∈ {20,50} on both models via the house `run.py sdoml_partition
++   --sdoml_asymmetric --full_eval` path. **16 jobs.**
++2. **New-model benchmarks** (`sbatch/run_smollm2_1.7b_benchmark.sh`,
++   `run_olmo2_1b_benchmark.sh`, `run_helium_2b_benchmark.sh`, all new;
++   Falcon3 dropped 2026-07-24 — verdict already decided on the dev box, TQ wins it) — per model: (a) the DOML K31 honest
++   chain (build λ/g256/fp8-cb/hdiag/intra-block-GPTQ/refit2/bulk-K2/rd-split →
++   k31_block_tune → k31_assign_tune pair → k29_honest_bpw → restore +
++   full eval) and (b) TesseraQ paper-exact (bit 2, gs 128, iters 250, bsz 4,
++   nsamples 512, seed 0, `--full_eval`). **6 jobs.**
++
++**Total: 22 sbatch jobs.**
++
++---
++
++## 0. What must be on Nibi first — the sync patch is NOT optional
++
++The dev-box working tree carries **uncommitted** changes that every job here
++depends on: the new-model family mappings in `run.py` / `src/eval_utils.py` /
++`src/run_tesseraq.py` (without them every smollm2/olmo2/helium job dies
++with `ValueError: Unsupported model` — the SmolLM2 TesseraQ crash was observed
++live on the dev box pre-fix), the `Salesforce/wikitext` dataset namespacing in
++`datautils.py`, the `CRB_REPO` repo-root fix in all `kernels/pack/*` tools
++(they previously hardcoded `/workspace/BiLLM2`), and the `--full-eval`
++downstream passthrough on both restore-eval paths. `nibi_sync.patch` carries
++the full working-tree diff **plus** the untracked files the jobs need
++(`kernels/pack/awq_transform.py`, the five new sbatch scripts, this document).
++It applies cleanly ONLY on commit `6675f49` ("New DOML") — verified against a
++pristine clone on the dev box.
++
++`kernels/pack/awq_transform.py` note: `run.py` imports it **lazily**, only
++inside branches gated on `CRB_AWQ_ALPHA` / `CRB_AWQ_V2` /
++`--salient_metric actmag`. None of the 22 jobs sets those, so it is not on any
++job's import path — it ships anyway so the patched `run.py` can never hit a
++missing-module edge on Nibi.
++
++## 1. Login-node steps, in order
++
++```bash
++cd ~/CRB   # (wherever the Nibi checkout lives; repo root, NOT sbatch/)
++
++# 1. Bring the checkout to the commit the patch was cut against.
++git fetch origin
++git checkout main
++git pull                      # must land on 6675f49 "New DOML"
++git rev-parse HEAD            # -> 6675f49e8a1595aebfd8344aa8fad20885a23a49
++git status --porcelain        # must be EMPTY; stash/clean local edits first
++
++# 2. Copy the patch from the dev box and apply it.
++#    (scp platogpu007:/workspace/CRB/nibi_sync.patch .)
++git apply --stat  nibi_sync.patch   # review: 26 modified + 7 new files
++git apply --check nibi_sync.patch   # must print nothing
++git apply nibi_sync.patch
++ls -la sbatch/run_sdoml_sweep.sh    # new scripts arrive executable (100755)
++
++# 3. Refresh the offline caches (login node has internet; compute nodes do
++#    not). Fetches the four new models, warms the NAMESPACED
++#    Salesforce/wikitext dataset id the patched datautils now requests, and
++#    verifies Olmo2/Helium transformers support before any GPU time is spent.
++#    .hf_token handling is unchanged (read from ./.hf_token if present; the
++#    four new models are ungated and need no token).
++./sbatch/download_cache.sh
++
++# 4. Submit. Replace def-xxx with the usual account.
++./sbatch/run_sdoml_sweep.sh          --account def-xxx   # 16 jobs
++./sbatch/run_smollm2_1.7b_benchmark.sh --account def-xxx #  2 jobs
++./sbatch/run_olmo2_1b_benchmark.sh   --account def-xxx   #  2 jobs
++./sbatch/run_helium_2b_benchmark.sh  --account def-xxx   #  2 jobs
++```
++
++## 2. Per-job resources (22 jobs)
++
++| # | Job name | GRES | CPUs | Mem | Time | Payload |
++|---|---|---|---|---|---|---|
++| 6 | `qwen3_1.7b_sdoml-s{5,20,25,40,50,75}` | `3g.40gb` | 8 | 64G | 10:00:00 | SDOML honest chain + full eval |
++| 6 | `llama3_1b_sdoml-s{5,20,25,40,50,75}` | `3g.40gb` | 8 | 64G | 10:00:00 | SDOML honest chain + full eval |
++| 2 | `qwen3_1.7b_sdoml_part_asym-s{20,50}` | `2g.20gb` | 4 | 32G | 36:00:00 | run.py asym + full eval (house profile verbatim) |
++| 2 | `llama3_1b_sdoml_part_asym-s{20,50}` | `2g.20gb` | 4 | 32G | 26:00:00 | run.py asym + full eval (house profile verbatim) |
++| 1 | `smollm2_1.7b_doml` | `3g.40gb` | 8 | 64G | 10:00:00 | DOML K31 chain, λ=32e-5, batch4 |
++| 1 | `olmo2_1b_doml` | `3g.40gb` | 8 | 64G | 10:00:00 | DOML K31 chain, λ=19e-5, batch2 |
++| 1 | `helium1_2b_doml` | `3g.40gb` | 8 | 64G | 14:00:00 | DOML K31 chain, λ=16e-5, batch2 (2B class, dev-box wall 4.3 h) |
++| 3 | `{smollm2_1.7b,olmo2_1b,helium1_2b}_tesseraq` | `h100` (full) | 10 | 160G | 28:00:00 | TesseraQ paper-exact + full eval |
++
++GRES strings are the full long-form MIG names (`nvidia_h100_80gb_hbm3_2g.20gb`
++etc.) copied verbatim from the proven house scripts; `4g.40gb` is NOT
++provisioned on Nibi (Gotcha #33) and is not used anywhere.
++
++Sizing rationale (dev-box measurements, never undercut):
++
++- **SDOML/DOML chains on 3g.40gb, not 2g.20gb:** assignment-tune used
++  29–35 GB on the old A40s, OOM'd a 24 GB slice for Llama-3.2-1B even at
++  batch4 (tracker incidents), and the DOML 1B-class chain envelope was proven
++  at 24 GB with the batch2 (smollm2: batch4) knobs the scripts pin. 20 GB
++  undercuts every proven envelope; 3g.40gb (40 GB) is the smallest Nibi slice
++  at or above it. The 2g.20gb house precedent covered only single-stage
++  `run.py sdoml`/`doml` jobs, not the tune chain.
++- **λ (new models, PROVISIONAL, parameterized at the top of each script):**
++  smollm2 32e-5, olmo2 19e-5, helium 16e-5 — current best-known
++  rate-matched picks from the dev-box arms (honest bpw — / 2.1855 / 2.1160). Re-pick only if a Nibi honest-bpw log lands far off ≤2.25-class.
++- **SDOML has no λ and no g256 stage:** `--rd-split` is a DOML-build knob the
++  SDOML chain does not have, and the g256 codebook refit was measured a dead
++  end for SDOML (`SDOML_honest_frontier.md` §9). The paper SDOML recipe is
++  g128 + fp8 codebooks (via block-tune) + assignment-tune, which is exactly
++  what the sweep runs.
++- **TesseraQ on full h100 + 160G:** dev-box peak >23.6 GB GPU (OOMed a 24 GB
++  slice) and >100 GB RSS; house precedent for this size class (Qwen3-1.7B /
++  Llama-3.2-1B tesseraq) is GPU_FULL + 160G + 28 h — kept ×1, not shrunk.
++
++## 3. Where results land
++
++- **CSVs** (fcntl-locked appends, one row per (task, metric)):
++  - SDOML sweep: `results/sdoml_sweep_<model>_<config>.csv` — one CSV per job,
++    deliberately separate from the April `*_ptq_benchmark.csv` files so rerun
++    cells never mix with old rows.
++  - New models: `results/<model_short>_ptq_benchmark.csv` (house convention;
++    these models never ran on Nibi, so the names are collision-free).
++- **Honest bpw**: printed in the job `.out` log —
++  `grep -h "HONEST bpw" logs/*sdoml-s*_*.out logs/*_doml_*.out`
++  (SDOML jobs print it twice: base bf16 reference, then FINAL fp8 container —
++  the FINAL one is the `tab:bpw_sparse` number).
++- **Containers**: `$SCRATCH/billm2_cache/downloads/doml_dumps/<model>/...`
++  (`sdoml-sNN[-btuned|-atuned]`, `k31-<tag>-lam<λ>-g256[-btuned|-atuned]`).
++  Expect a few GB per model — fine on scratch. Chain stages are idempotent
++  (skip on existing `manifest.json`), so a TIME-LIMIT or requeued job can
++  simply be resubmitted and resumes past finished stages.
++- **atune fallback**: if assignment-tune fails (its memory profile is the
++  chain's highest), the job logs a WARN and ships the **btuned** container —
++  tracker precedent: still a complete honest DOML/SDOML row. Check for
++  `WARN: .*assign_tune failed` in `.out` logs to know which rows shipped
++  btuned.
++
++## 4. Open risks / things I could not verify from the dev box
++
++1. **SLURM specifics** (module names `gcc arrow scipy-stack cuda cudnn`, GRES
++   strings, b1–b5 walltime tiers, `--parsable` behavior) are copied verbatim
++   from the proven April scripts — there is no `sbatch`/`sinfo` on this box to
++   re-confirm the cluster still advertises them.
++2. **Nibi venv transformers version**: April jobs proved ≥4.51 (Qwen3 guard).
++   OLMo-2 needs ≥4.47, Helium ≥4.49 — expected satisfied, but not verifiable
++   from here. Both `download_cache.sh` and the per-job guards abort cleanly
++   (before GPU time) if not.
++3. **Helium via the LlamaForCausalLM branch** is the dev-box-proven load path
++   (full chain rc=0), but the Nibi transformers build must resolve the
++   `helium` model_type the same way; the guard probes it.
++4. **SDOML+partition asymmetric honest bpw**: there is NO container/honest-bpw
++   tooling for the asymmetric arm (the frontier doc dead-ended it as an
++   iterable vehicle). These 4 jobs produce PPL + downstream via the exact May
++   command; the bpw for `tab:bpw_sparse` stays the analytic `eq:bpw_asym`
++   value (2.51 / 2.09 at d_in=2048). Building an asym container tool remains
++   an open item — flagged, not silently absorbed.
++5. **Walltimes for the chain jobs** (10 h / 14 h) are dev-box walls with ≥2×
++   margin for the slower per-SM Nibi MIG slices, not measured-on-Nibi numbers.
++   Chains are idempotent, so a TIME LIMIT costs a resubmit, not the work done.
++6. **Datasets cache staleness**: the namespaced `Salesforce/wikitext` warm in
++   `download_cache.sh` must run BEFORE any new-model job (Step 3 ordering);
++   existing Qwen/Llama tokenized `.pt` caches are unaffected.
+diff --git a/run.py b/run.py
+index 338b2ba..6cff9e6 100644
+--- a/run.py
++++ b/run.py
+@@ -37,7 +37,7 @@ def get_model(model_name):
+             from transformers import OPTForCausalLM
+             model = OPTForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
+             model.seqlen = model.config.max_position_embeddings
+-        elif "llama" in model_name.lower() or "danube" in model_name.lower():
++        elif "llama" in model_name.lower() or "danube" in model_name.lower() or "falcon" in model_name.lower() or "helium" in model_name.lower():
+             from transformers import LlamaForCausalLM
+             model = LlamaForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
+             model.seqlen = 2048
+@@ -49,6 +49,15 @@ def get_model(model_name):
+             from transformers import AutoModelForCausalLM
+             model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
+             model.seqlen = min(model.config.max_position_embeddings, 2048)
++        elif "olmo" in model_name.lower():
++            # Olmo2ForCausalLM (e.g. allenai/OLMo-2-0425-1B): llama-style
++            # model.model.layers access, loaded via AutoModelForCausalLM.
++            # OLMo-2 checkpoints are stored fp32; load in bf16 to match every
++            # other model family (doml_dump.derive_dpk asserts bf16 weights).
++            import torch as _torch
++            from transformers import AutoModelForCausalLM
++            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=_torch.bfloat16, cache_dir=downloads_dir, use_safetensors=True, attn_implementation="eager")
++            model.seqlen = min(model.config.max_position_embeddings, 2048)
+         elif "pythia" in model_name.lower():
+             from transformers import GPTNeoXForCausalLM
+             import torch as _torch
+@@ -146,7 +155,7 @@ def quant_sequential(model, dataloader, dev):
+             and model.model.decoder.project_in
+         ):
+             model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
+-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
++    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
+         layers = model.model.layers
+         model.model.embed_tokens = model.model.embed_tokens.to(dev)
+         model.model.norm = model.model.norm.to(dev)
+@@ -215,7 +224,7 @@ def quant_sequential(model, dataloader, dev):
+             and model.model.decoder.project_in
+         ):
+             model.model.decoder.project_in = model.model.decoder.project_in.cpu()
+-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
++    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
+         model.model.embed_tokens = model.model.embed_tokens.cpu()
+         model.model.norm = model.model.norm.cpu()
+         if hasattr(model.model, "rotary_emb"):
+@@ -549,7 +558,7 @@ def sbh_sequential(model, dataloader, dev, r_attn=60, r_mlp=30):
+             model.model.decoder.project_out = model.model.decoder.project_out.to(dev)
+         if hasattr(model.model.decoder, "project_in") and model.model.decoder.project_in:
+             model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
+-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
++    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
+         layers = model.model.layers
+         model.model.embed_tokens = model.model.embed_tokens.to(dev)
+         model.model.norm = model.model.norm.to(dev)
+@@ -599,7 +608,7 @@ def sbh_sequential(model, dataloader, dev, r_attn=60, r_mlp=30):
+     if "opt" in args.model:
+         model.model.decoder.embed_tokens = model.model.decoder.embed_tokens.cpu()
+         model.model.decoder.embed_positions = model.model.decoder.embed_positions.cpu()
+-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
++    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
+         model.model.embed_tokens = model.model.embed_tokens.cpu()
+         model.model.norm = model.model.norm.cpu()
+         if hasattr(model.model, "rotary_emb"):
+@@ -687,7 +696,7 @@ def mixed_sequential(model, dataloader, dev):
+         layers = model.model.decoder.layers
+         model.model.decoder.embed_tokens = model.model.decoder.embed_tokens.to(dev)
+         model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(dev)
+-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
++    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
+         layers = model.model.layers
+         model.model.embed_tokens = model.model.embed_tokens.to(dev)
+         model.model.norm = model.model.norm.to(dev)
+@@ -736,7 +745,7 @@ def mixed_sequential(model, dataloader, dev):
+     if "opt" in args.model:
+         model.model.decoder.embed_tokens = model.model.decoder.embed_tokens.cpu()
+         model.model.decoder.embed_positions = model.model.decoder.embed_positions.cpu()
+-    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower():
++    elif "llama" in args.model.lower() or "danube" in args.model.lower() or "qwen" in args.model.lower() or "smollm" in args.model.lower() or "granite" in args.model.lower() or "falcon" in args.model.lower() or "helium" in args.model.lower() or "olmo" in args.model.lower():
+         model.model.embed_tokens = model.model.embed_tokens.cpu()
+         model.model.norm = model.model.norm.cpu()
+         if hasattr(model.model, "rotary_emb"):
+@@ -890,7 +899,12 @@ if __name__ == "__main__":
+         "--salient_metric",
+         type=str,
+         default="magnitude",
+-        choices=["magnitude", "hessian"],
++        choices=["magnitude", "hessian", "actmag"],
++        help="Salient-column selection metric. 'actmag' ranks columns by "
++             "s_j * sum_i |W_ij| with s = AWQ activation scale a**alpha "
++             "(computed from calib, NOT applied to the weights); linears "
++             "outside the AWQ v1 norm-group scope (o_proj/down_proj) fall "
++             "back to plain magnitude.",
+     )
+     parser.add_argument(
+         "--partition",
+@@ -1248,6 +1262,79 @@ if __name__ == "__main__":
+         if(args.just_download):
+             print(f"Just download flag set, exiting")
+             exit()
++
++        # AWQ / SmoothQuant-style activation-scaling transform (opt-in via
++        # CRB_AWQ_ALPHA). Output-preserving reparametrization of the FP model
++        # folded into the RMSNorm weights (zero extra stored tensors -> bpw
++        # unchanged). Applied AFTER model load + calibration data is ready but
++        # BEFORE any per-layer Hessian accumulation / quantization, so DOML (and
++        # every other method) then quantizes the transformed model transparently.
++        # Unset env -> byte-identical to the previous behaviour.
++        if os.environ.get('CRB_AWQ_ALPHA'):
++            from kernels.pack.awq_transform import apply_awq_from_calib
++            _awq_alpha = float(os.environ['CRB_AWQ_ALPHA'])
++            print(f"[AWQ] CRB_AWQ_ALPHA set -> applying activation scaling (alpha={_awq_alpha})")
++            _awq_scales = apply_awq_from_calib(model, dataloader, _awq_alpha, device)
++            # Persist the per-layer scales so restore/btune/atune can re-apply
++            # the g <- g/s norm fold (the DPK dump stores only the quantized
++            # linears; the modified RMSNorm weights are NOT in the dump).
++            _awq_scale_out = os.environ.get('CRB_AWQ_SCALE_OUT')
++            if _awq_scale_out:
++                from kernels.pack.awq_transform import save_scales
++                save_scales(_awq_scales, _awq_scale_out)
++                print(f"[AWQ] saved per-layer scales -> {_awq_scale_out}")
++
++        # AWQ v2 (2026-07-24, opt-in via CRB_AWQ_V2=1 IN ADDITION to
++        # CRB_AWQ_ALPHA; unset -> bit-identical behavior): extend the scaling
++        # to o_proj/down_proj. The inverse folds land in v_proj/up_proj OUTPUT
++        # ROWS (quantized linears, same block) — NOT in any norm — so the DPK
++        # dump captures everything and restore/btune/atune need NO v2 fold.
++        # Runs AFTER the v1 fold above: v2's calibration pass therefore sees
++        # the v1-TRANSFORMED model, matching what will be quantized (v1 is
++        # output-preserving, and v1/v2 touch different axes of v_proj, so the
++        # two compose). Same alpha as v1.
++        if os.environ.get('CRB_AWQ_V2') == '1':
++            if not os.environ.get('CRB_AWQ_ALPHA'):
++                raise RuntimeError(
++                    "CRB_AWQ_V2=1 requires CRB_AWQ_ALPHA to be set (v2 "
++                    "extends the v1 transform and reuses its alpha)")
++            from kernels.pack.awq_transform import (
++                apply_awq_v2_from_calib, save_v2_scales)
++            print(f"[AWQV2] CRB_AWQ_V2=1 -> extending activation scaling to "
++                  f"o_proj/down_proj (alpha={_awq_alpha})", flush=True)
++            _awq_v2_scales, _awq_v2_meta = apply_awq_v2_from_calib(
++                model, dataloader, _awq_alpha, device)
++            print(f"AWQV2: scaled o_proj/down_proj "
++                  f"({_awq_v2_meta['n_groups']} groups, "
++                  f"GQA n_rep={_awq_v2_meta['n_rep']})", flush=True)
++            # Analysis-only artifact: restore must NEVER fold these (the v2
++            # folds are already inside the dumped quantized linears).
++            _awq_v2_out = os.environ.get('CRB_AWQ_V2_SCALE_OUT')
++            if _awq_v2_out:
++                save_v2_scales(_awq_v2_scales, _awq_v2_out)
++                print(f"[AWQV2] saved per-layer v2 scales -> {_awq_v2_out}")
++
++        # CRB_SALIENT_METRIC=actmag (2026-07-23): activation-aware SALIENT
++        # SELECTION ONLY. Compute the AWQ scales s = a**alpha (same math and
++        # v1 norm-group scope as the CRB_AWQ_ALPHA transform above) but do NOT
++        # modify any weight or norm; instead stash s on each covered linear
++        # (plain `_crb_actmag_s` attribute) so the salient-column search ranks
++        # columns by s_j * sum_i |W_ij| (see utils/structure.py "actmag").
++        # o_proj/down_proj have no stash and keep the plain magnitude ranking.
++        # Guard: only --salient_metric actmag enters this block, so the
++        # default magnitude/hessian paths are bit-identical to before.
++        if args.salient_metric == 'actmag':
++            from kernels.pack.awq_transform import (
++                collect_scales_from_calib, attach_selection_scales)
++            _actmag_alpha = float(os.environ.get('CRB_ACTMAG_ALPHA', '0.5'))
++            print(f"[ACTMAG] salient_metric=actmag -> computing AWQ scales "
++                  f"(alpha={_actmag_alpha}) WITHOUT applying them", flush=True)
++            _actmag_scales = collect_scales_from_calib(
++                model, dataloader, alpha=_actmag_alpha, device=device)
++            _n_cov, _n_fb = attach_selection_scales(model, _actmag_scales)
++            print(f"ACTMAG: using activation-scaled magnitude saliency "
++                  f"({_n_cov} linears covered, {_n_fb} fallback)", flush=True)
++
+         if args.low_quant_method == "fp16":
+             print("FP16 mode: skipping quantization")
+         elif args.low_quant_method == "sbh":
+diff --git a/sbatch/download_cache.sh b/sbatch/download_cache.sh
+index a616a5d..02542f1 100755
+--- a/sbatch/download_cache.sh
++++ b/sbatch/download_cache.sh
+@@ -174,6 +174,17 @@ models = [
+     'meta-llama/Llama-3.2-1B',
+     'meta-llama/Llama-3.2-3B',
+     'NousResearch/Meta-Llama-3.1-8B',
++    # New-model generalization arm (2026-07-24): DOML K31 chain + TesseraQ
++    # via run_smollm2_1.7b_benchmark.sh / run_olmo2_1b_benchmark.sh /
++    # run_helium_2b_benchmark.sh. All three are
++    # UNGATED — no token needed (the .hf_token pickup above is harmless).
++    # (Falcon3 dropped 2026-07-24: verdict decided on dev box, TQ wins it.)
++    # SmolLM2 / Helium-1 are LlamaForCausalLM checkpoints; OLMo-2
++    # needs transformers>=4.47 (Olmo2ForCausalLM), Helium-1 needs >=4.49
++    # (helium model_type in AutoConfig) — both verified below.
++    'HuggingFaceTB/SmolLM2-1.7B',
++    'allenai/OLMo-2-0425-1B',
++    'kyutai/helium-1-2b',
+ ]
+ 
+ for model_name in models:
+@@ -214,6 +225,26 @@ except Exception as exc:
+         f'FATAL: LlamaForCausalLM not importable ({exc!r}). '
+         'Check transformers install (see fix_venv_torchvision.sh for ABI fixes).'
+     )
++# New-model arm (2026-07-24): OLMo-2 requires Olmo2ForCausalLM (transformers
++# >= 4.47); Helium-1 requires the helium model_type (>= 4.49) even though the
++# runner loads it through the LlamaForCausalLM branch. Abort here rather than
++# in-job if the venv's transformers predates either.
++try:
++    from transformers.models.olmo2 import Olmo2ForCausalLM  # noqa: F401
++    print(f'Olmo2ForCausalLM import OK.')
++except Exception as exc:
++    raise SystemExit(
++        f'FATAL: Olmo2ForCausalLM not importable ({exc!r}). '
++        'transformers >= 4.47 is required for allenai/OLMo-2-0425-1B.'
++    )
++try:
++    from transformers.models.helium import configuration_helium  # noqa: F401
++    print(f'helium model_type import OK.')
++except Exception as exc:
++    raise SystemExit(
++        f'FATAL: helium model_type not importable ({exc!r}). '
++        'transformers >= 4.49 is required for kyutai/helium-1-2b.'
++    )
+ "
+ 
+ echo ""
+@@ -241,6 +272,16 @@ print('Downloading wikitext (wikitext-2-raw-v1)...')
+ load_dataset('wikitext', 'wikitext-2-raw-v1')
+ print('  Done: wikitext-2')
+ 
++# 2026-07-24: the patched datautils.py (nibi_sync.patch) requests the
++# NAMESPACED id 'Salesforce/wikitext' — huggingface_hub >= 1.0 rejects bare
++# canonical dataset ids, and the dev box already carries the namespaced form.
++# The datasets cache keys bare and namespaced ids DIFFERENTLY
++# ('wikitext' vs 'Salesforce___wikitext'), so the bare-id warm above does NOT
++# satisfy an offline load of the namespaced id. Warm both; same repo bytes.
++print('Downloading Salesforce/wikitext (wikitext-2-raw-v1, namespaced id)...')
++load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1')
++print('  Done: Salesforce/wikitext')
++
+ # C4 shards — use hf_hub_download NOT load_dataset. The latter's config-hash
+ # changes between online pre-warm and offline runtime (resolved URLs differ),
+ # which made calibration jobs fail with 'Couldn't find cache for allenai/c4
+diff --git a/sbatch/run_helium_2b_benchmark.sh b/sbatch/run_helium_2b_benchmark.sh
+new file mode 100755
+index 0000000..c0f5b42
+--- /dev/null
++++ b/sbatch/run_helium_2b_benchmark.sh
+@@ -0,0 +1,423 @@
++#!/bin/bash
++# ============================================================================
++# kyutai/helium-1-2b — 2-bit PTQ benchmark: DOML K31 chain + TesseraQ (Nibi)
++# ============================================================================
++#
++# Sister script to run_llama3_1b_benchmark.sh / run_qwen_1.7b_benchmark.sh,
++# extended to the new-model generalization arm (2026-07-24). Dispatches one
++# sbatch job per method:
++#
++#   doml     — the full honest DOML K31 chain (the recipe of every rerun
++#              DOML paper row; scripts/research/doml_pipeline.sh precedent):
++#                doml_group_refit --run  (build: λ rd-split, g256 codebook
++#                    groups, fp8-e4m3 codebooks, hdiag cb weighting,
++#                    intra-block GPTQ, refit-iters 2, bulk-K 2)
++#              → k31_block_tune          (stage-1 output-aware level tune)
++#              → k31_assign_tune --mode pair  (stage-2 assignment tune;
++#                    on failure the btuned container ships — tracker
++#                    precedent, still a complete honest DOML row)
++#              → k29_honest_bpw          (honest bpw of the shipped container)
++#              → doml_group_refit --restore-dpk ... --eval-extra-ppl
++#                    --full-eval         (wt2/c4/ptb + MMLU/HellaSwag/ARC)
++#
++#   tesseraq — TesseraQ paper-exact (ICLR 2025 recipe, identical arguments
++#              to every other model's tesseraq cell in this suite).
++#
++# Model facts: Helium-1 2B, helium model_type loaded via the LlamaForCausalLM branch (dev-box proven). Dev-box K31 chain wall (24 GB slice, batch2): build 5295s + btune 1130s + atune 3705s + eval 5382s ≈ 4.3 h — the 2B class needs the b3 walltime.
++#
++# Dev-box measurements (2026-07-24, Blackwell MIG slices — used for sizing,
++# never undercut):
++#   - DOML build+tunes for the 1B/2B class fit a 24 GB slice at the batch/
++#     stream-chunk knobs pinned below. 2g.20gb (20 GB) is SMALLER than that
++#     proven envelope ⇒ DOML chain jobs use 3g.40gb.
++#   - TesseraQ paper-exact peaked >23.6 GB GPU (OOMed a 24 GB slice; needs
++#     ~27 GB) and >100 GB host RSS ⇒ full h100 + 160 G, the house tesseraq
++#     precedent for this size class (4g.40gb is NOT provisioned on Nibi,
++#     Gotcha #33 — the house 1.7B tesseraq profile is GPU_FULL + 160G).
++#
++# PREREQ: nibi_sync.patch applied (the helium family mappings in run.py /
++# src/eval_utils.py / src/run_tesseraq.py and the kernels/pack fixes are
++# uncommitted on the dev box — without them every job here crashes with
++# "Unsupported model"), and ./sbatch/download_cache.sh re-run (fetches
++# kyutai/helium-1-2b + the namespaced wikitext repo).
++#
++# Usage:
++#   ./sbatch/run_helium_2b_benchmark.sh                      # submit both jobs
++#   ./sbatch/run_helium_2b_benchmark.sh --account def-foo
++#   ./sbatch/run_helium_2b_benchmark.sh --local              # run serially, no SLURM
++#
++# ============================================================================
++
++# ============================================================================
++# COMMAND LINE ARGUMENTS
++# ============================================================================
++
++ACCOUNT=""
++LOCAL_MODE=false
++
++while [[ $# -gt 0 ]]; do
++    case $1 in
++        --account)
++            ACCOUNT="$2"
++            shift 2
++            ;;
++        --local)
++            LOCAL_MODE=true
++            shift
++            ;;
++        *)
++            echo "Unknown option: $1"
++            echo "Usage: $0 [--account SLURM_ACCOUNT] [--local]"
++            exit 1
++            ;;
++    esac
++done
++
++# ============================================================================
++# CONFIGURATION
++# ============================================================================
++
++MODEL="kyutai/helium-1-2b"
++MODEL_SHORT="helium1_2b"
++MODEL_SUB="helium1-2b"                # downloads/doml_dumps/<sub>/ dump subdir
++DATASET="wikitext2"
++SEED=0
++
++# HF cache directory uses the canonical models--<org>--<repo> layout.
++MODEL_CACHE_DIR="models--kyutai--helium-1-2b"
++
++CSV_NAME="${MODEL_SHORT}_ptq_benchmark.csv"
++CSV_ABS="$(pwd)/results/$CSV_NAME"
++
++# ----------------------------------------------------------------------------
++# DOML λ (rd-split rate weight) — PROVISIONAL best-known rate-matched pick.
++# 16e-5 is the dev-box rate-matched pick (honest bpw 2.1160; matches the paper Qwen3-1.7B/Llama-3.2-1B λ; 2026-07-24).
++# Re-pick only if the honest-bpw log lands far off the ≤2.25-class target
++# (tracker λ-audit rule). The dump dir name tracks this value.
++# ----------------------------------------------------------------------------
++DOML_LAMBDA="16e-5"
++# Tune-stage memory knobs, measured on the dev box for THIS model (24 GB
++# slice envelope). Do not raise on MIG slices without re-measuring.
++DOML_BATCH=2
++DOML_SCHUNK=2
++DOML_DUMP_DIR="downloads/doml_dumps/${MODEL_SUB}/k31-helium-lam${DOML_LAMBDA}-g256"
++
++# Nibi GRES strings. Full long-form MIG names are REQUIRED — short forms
++# like `1g.10gb` are rejected (Gotcha #11). 4g.40gb is NOT provisioned
++# (Gotcha #33; sinfo confirms).
++GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
++GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
++GPU_LARGE="--gres=gpu:nvidia_h100_80gb_hbm3_3g.40gb:1"
++GPU_FULL="--gres=gpu:h100:1"
++
++# TesseraQ paper-exact settings (identical to every other model's tesseraq
++# cell in this suite — run_qwen_1.7b_benchmark.sh precedent).
++TESSERAQ_BIT=2
++TESSERAQ_GROUPSIZE=128
++TESSERAQ_ITERATIONS=250
++TESSERAQ_BATCH_SIZE=4
++TESSERAQ_NSAMPLES=512
++
++# Methods to benchmark — one sbatch job per entry.
++techniques=(
++    "doml"
++    "tesseraq"
++)
++
++# ============================================================================
++# HELPER FUNCTIONS
++# ============================================================================
++
++get_job_resources() {
++    # Sets: gpu_resource, cpus, mem
++    case $1 in
++        doml)
++            # Full K31 chain. Dev-box proven envelope is a 24 GB slice at
++            # batch $DOML_BATCH; 2g.20gb (20 GB) undercuts it ⇒ 3g.40gb.
++            # Host RAM: 64G = 2× the house 32G DOML budget (container +
++            # calib + restore copies).
++            gpu_resource="$GPU_LARGE"
++            cpus=8
++            mem="64G"
++            ;;
++        tesseraq)
++            # Paper-exact TesseraQ (iter=250, bsz=4, nsamples=512). Dev-box:
++            # >23.6 GB GPU (OOMed 24 GB) and >100 GB RSS. House precedent
++            # for this size class (Qwen3-1.7B/Llama-3.2-1B): GPU_FULL + 160G.
++            gpu_resource="$GPU_FULL"
++            cpus=10
++            mem="160G"
++            ;;
++        *)
++            gpu_resource="$GPU_MEDIUM"
++            cpus=4
++            mem="32G"
++            ;;
++    esac
++}
++
++get_time_limit() {
++    # Alliance Nibi tiers: b1≤3h, b2≤12h, b3≤24h, b4≤72h, b5≤168h.
++    # tesseraq: house precedent ×1 (28 h, b4) — do NOT shrink.
++    # doml: dev-box chain wall + eval suite, ×2+ margin for the slower
++    #       per-SM Nibi MIG slice; never below the 05:00:00 house doml floor.
++    case $1 in
++        doml)      echo "14:00:00" ;;
++        tesseraq)  echo "28:00:00" ;;
++        *)         echo "05:00:00" ;;
++    esac
++}
++
++build_python_cmd() {
++    # Prints the job payload. doml emits the full multi-line K31 chain
++    # (idempotent stages, per-stage FATAL guards — requeued jobs resume);
++    # tesseraq emits the house one-liner. Everything except EVAL_DIR is
++    # resolved at submit time; \$EVAL_DIR survives to run at job time.
++    local technique=$1
++    local dd="$DOML_DUMP_DIR"
++
++    # --full_eval = PPL on (wikitext2,c4,ptb) + MMLU + HellaSwag + ARC-Easy +
++    # ARC-Challenge. Each task writes its own row to BILLM_BENCH_CSV.
++    local common_evals="--full_eval"
++
++    case $technique in
++        doml)
++            cat <<CHAIN
++mkdir -p downloads/doml_dumps/${MODEL_SUB}
++echo "=== [1/5] DOML K31 build (lam=${DOML_LAMBDA}, g256, fp8 cb, hdiag, intra-block GPTQ, refit2, bulk-K2, rd-split) ==="
++if [ ! -f "${dd}/manifest.json" ]; then
++    python3 -u kernels/pack/doml_group_refit.py --run --model $MODEL --g 256 --dump-dir "${dd}" --codebook-dtype float8_e4m3fn --cb-weight hdiag --intra-block-gptq --refit-iters 2 --bulk-k 2 --rd-split $DOML_LAMBDA || { echo "FATAL: doml build failed"; exit 1; }
++else
++    echo "build manifest exists — skipping (idempotent resume)"
++fi
++echo "=== [2/5] stage-1 block tune (batch $DOML_BATCH / stream-chunk $DOML_SCHUNK) ==="
++if [ ! -f "${dd}-btuned/manifest.json" ]; then
++    python3 -u kernels/pack/k31_block_tune.py --src "${dd}" --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || { echo "FATAL: k31_block_tune failed"; exit 1; }
++else
++    echo "btuned manifest exists — skipping (idempotent resume)"
++fi
++echo "=== [3/5] stage-2 assignment tune (pair mode) ==="
++EVAL_DIR="${dd}-btuned"
++if [ ! -f "${dd}-atuned/manifest.json" ]; then
++    python3 -u kernels/pack/k31_assign_tune.py --src "${dd}-btuned" --mode pair --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || echo "WARN: k31_assign_tune failed — shipping the btuned container (tracker precedent: btuned is a complete honest DOML row)"
++else
++    echo "atuned manifest exists — skipping (idempotent resume)"
++fi
++if [ -f "${dd}-atuned/manifest.json" ] && ls "${dd}-atuned"/*.dpk.safetensors >/dev/null 2>&1; then
++    EVAL_DIR="${dd}-atuned"
++fi
++echo "=== [4/5] honest bpw (k29, on \$EVAL_DIR) ==="
++python3 -u kernels/pack/k29_honest_bpw.py --dir "\$EVAL_DIR" || { echo "FATAL: k29_honest_bpw failed"; exit 1; }
++echo "=== [5/5] restore + full eval (\$EVAL_DIR) ==="
++python3 -u kernels/pack/doml_group_refit.py --run --restore-dpk "\$EVAL_DIR" --eval-extra-ppl --full-eval || { echo "FATAL: restore eval failed"; exit 1; }
++CHAIN
++            ;;
++        tesseraq)
++            # Paper-faithful TesseraQ (AWQ init + PAR + grad-clip + bfloat16
++            # autocast + batched forward) — house command verbatim.
++            echo "python3 -u src/run_tesseraq.py $MODEL $DATASET --bit $TESSERAQ_BIT --group_size $TESSERAQ_GROUPSIZE --iterations $TESSERAQ_ITERATIONS --batch_size $TESSERAQ_BATCH_SIZE --nsamples $TESSERAQ_NSAMPLES --seed $SEED --device cuda:0 $common_evals"
++            ;;
++        *)
++            echo "echo 'Unknown technique: $technique'; exit 1"
++            ;;
++    esac
++}
++
++get_technique_desc() {
++    case $1 in
++        doml)      echo "DOML K31 chain (lam=$DOML_LAMBDA g256 fp8-cb hdiag intra-gptq refit2 bulkK2 rd-split -> btune -> atune pair -> honest bpw -> full eval)" ;;
++        tesseraq)  echo "TesseraQ paper-exact (bit=$TESSERAQ_BIT, gs=$TESSERAQ_GROUPSIZE, iters=$TESSERAQ_ITERATIONS, bsz=$TESSERAQ_BATCH_SIZE, nsamples=$TESSERAQ_NSAMPLES, AWQ init on)" ;;
++    esac
++}
++
++# ============================================================================
++# MAIN LOOP
++# ============================================================================
++
++job_count=0
++mkdir -p ./logs ./results
++
++echo "============================================"
++echo "$MODEL PTQ Benchmark Suite (Nibi)"
++echo "============================================"
++echo "Model:       $MODEL"
++echo "Dataset:     $DATASET"
++echo "Seed:        $SEED"
++echo "DOML lam:    $DOML_LAMBDA (provisional rate-matched pick)"
++echo "Techniques:  ${techniques[*]}"
++echo "Shared CSV:  $CSV_ABS"
++echo "Logs:        ./logs/"
++echo "============================================"
++echo ""
++
++for technique in "${techniques[@]}"; do
++    technique_desc=$(get_technique_desc "$technique")
++    time_limit=$(get_time_limit "$technique")
++    get_job_resources "$technique"
++
++    job_name="${MODEL_SHORT}_${technique}"
++    python_cmd=$(build_python_cmd "$technique")
++
++    if [[ "$LOCAL_MODE" == true ]]; then
++        echo "========================================"
++        echo "Running locally: $job_name"
++        echo "Config: $technique_desc"
++        echo "Command: $python_cmd"
++        echo "========================================"
++        if [[ -n "${SCRATCH:-}" && -d "${SCRATCH}" ]]; then
++            CACHE_ROOT_LOCAL="$SCRATCH/billm2_cache"
++            DOWNLOADS_LOCAL="$CACHE_ROOT_LOCAL/downloads"
++        else
++            CACHE_ROOT_LOCAL="$(pwd)"
++            DOWNLOADS_LOCAL="$(pwd)/downloads"
++        fi
++        if [[ "$DOWNLOADS_LOCAL" != "$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++            ln -sfn "$DOWNLOADS_LOCAL" ./downloads
++        fi
++        export BILLM_BENCH_CSV="$CSV_ABS"
++        export BILLM_DOWNLOADS_DIR="$DOWNLOADS_LOCAL"
++        export HF_HOME="$CACHE_ROOT_LOCAL/hf"
++        export HF_HUB_CACHE="$BILLM_DOWNLOADS_DIR"
++        export HF_DATASETS_CACHE="$CACHE_ROOT_LOCAL/hf/datasets"
++        export TORCH_HOME="$CACHE_ROOT_LOCAL/torch"
++        export HF_HUB_DISABLE_XET=1
++        export NUMBA_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/numba"
++        export PIP_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/pip"
++        export XDG_CACHE_HOME="$CACHE_ROOT_LOCAL/.cache"
++        export TMPDIR="${SLURM_TMPDIR:-$CACHE_ROOT_LOCAL/tmp}"
++        mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
++                 "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR" \
++                 "$BILLM_DOWNLOADS_DIR"
++        export HF_DATASETS_OFFLINE=1
++        export TRANSFORMERS_OFFLINE=1
++        export HF_HUB_OFFLINE=1
++        export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/src
++        export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++        eval "$python_cmd"
++        ((job_count++))
++        continue
++    fi
++
++    account_line=""
++    if [[ -n "$ACCOUNT" ]]; then
++        account_line="#SBATCH --account=$ACCOUNT"
++    fi
++
++    sbatch_id=$(sbatch --parsable <<EOF
++#!/bin/bash
++#SBATCH --job-name=$job_name
++#SBATCH --output=./logs/${job_name}_%j.out
++#SBATCH --error=./logs/${job_name}_%j.err
++#SBATCH --time=$time_limit
++#SBATCH $gpu_resource
++#SBATCH --cpus-per-task=$cpus
++#SBATCH --mem=$mem
++#SBATCH --ntasks-per-node=1
++#SBATCH --nodes=1
++$account_line
++
++module load gcc arrow scipy-stack cuda cudnn
++source ./env/bin/activate
++# Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
++# tqdm / accelerate / typing_extensions from \$HOME/.local/. Do NOT set
++# PYTHONNOUSERSITE=1 here.
++
++if [[ -n "\${SCRATCH:-}" && -d "\${SCRATCH}" ]]; then
++    CACHE_ROOT="\$SCRATCH/billm2_cache"
++else
++    CACHE_ROOT="\$(pwd)/downloads"
++fi
++
++if [[ "\$CACHE_ROOT" != "\$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++    ln -sfn "\$CACHE_ROOT" ./downloads
++fi
++
++export BILLM_DOWNLOADS_DIR="\$CACHE_ROOT/downloads"
++export HF_HOME="\$CACHE_ROOT/hf"
++export HF_HUB_CACHE="\$BILLM_DOWNLOADS_DIR"
++export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
++export TORCH_HOME="\$CACHE_ROOT/torch"
++export HF_HUB_DISABLE_XET=1
++export NUMBA_CACHE_DIR="\$CACHE_ROOT/.cache/numba"
++export PIP_CACHE_DIR="\$CACHE_ROOT/.cache/pip"
++export XDG_CACHE_HOME="\$CACHE_ROOT/.cache"
++if [[ -n "\${SLURM_TMPDIR:-}" && -d "\${SLURM_TMPDIR}" ]]; then
++    export TMPDIR="\$SLURM_TMPDIR"
++else
++    export TMPDIR="\$CACHE_ROOT/tmp"
++fi
++mkdir -p "\$HF_HOME" "\$HF_DATASETS_CACHE" "\$HF_HUB_CACHE" "\$TORCH_HOME" \\
++         "\$NUMBA_CACHE_DIR" "\$PIP_CACHE_DIR" "\$XDG_CACHE_HOME" "\$TMPDIR" \\
++         "\$BILLM_DOWNLOADS_DIR"
++
++export HF_DATASETS_OFFLINE=1
++export TRANSFORMERS_OFFLINE=1
++export HF_HUB_OFFLINE=1
++
++export BILLM_BENCH_CSV="$CSV_ABS"
++
++# kernels/pack tools resolve the repo root from CRB_REPO (rerun-campaign fix).
++export CRB_REPO="\$(pwd)"
++
++export PYTHONPATH=\$PYTHONPATH:\$(pwd):\$(pwd)/src
++
++# Tune stages / TesseraQ on MIG slices need expandable segments (tracker
++# lesson 2026-07-22; same fix as LNQ Fisher).
++export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++
++echo '========================================'
++echo "Job:        $job_name"
++echo "Model:      $MODEL"
++echo "Technique:  $technique"
++echo "Config:     $technique_desc"
++echo "Dataset:    $DATASET"
++echo "Seed:       $SEED"
++echo "Time limit: $time_limit"
++echo "GPU:        $gpu_resource"
++echo "CPUs / Mem: $cpus / $mem"
++echo "CSV:        \$BILLM_BENCH_CSV"
++echo "Cache root: \$CACHE_ROOT (\$HF_HOME)"
++echo "TMPDIR:     \$TMPDIR"
++echo "Started:    \$(date)"
++echo "SLURM job:  \$SLURM_JOB_ID"
++echo '========================================'
++echo "Python:             \$(which python)"
++python --version
++echo "CUDA_VISIBLE_DEVICES=\$CUDA_VISIBLE_DEVICES"
++# Sanity check: aborts before GPU time is spent if the venv is broken or
++# too old for this model family.
++python -c "from transformers import LlamaForCausalLM; from transformers.models.helium import configuration_helium; import transformers; print('transformers', transformers.__version__)" || {
++    echo "FATAL: LlamaForCausalLM / helium config not importable — transformers is too old (<4.49) for Helium-1."
++    exit 1
++}
++ls -d "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR 2>/dev/null || {
++    echo "FATAL: no $MODEL snapshot under \$BILLM_DOWNLOADS_DIR — run ./sbatch/download_cache.sh first."
++    exit 1
++}
++# Phase 11: refs/main is a prerequisite for offline from_pretrained under
++# HF_HUB_OFFLINE=1 (Gotcha #22).
++for _refs in "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR/refs/main; do
++    [ -s "\$_refs" ] || {
++        echo "FATAL: \$_refs missing or empty."
++        echo "       Re-run ./sbatch/download_cache.sh — needs"
++        echo "       snapshot_download(..., local_files_only=True) second pass."
++        exit 1
++    }
++done
++nvidia-smi || true
++$python_cmd
++echo '========================================'
++echo "Finished:   \$(date)"
++echo '========================================'
++EOF
++)
++    echo "  [$sbatch_id] $job_name  ($technique_desc, t=${time_limit}, gpu=${gpu_resource#--gres=gpu:})"
++    ((job_count++))
++done
++
++echo ""
++echo "============================================"
++echo "Total jobs submitted: $job_count"
++echo "Results CSV:          $CSV_ABS"
++echo "Logs directory:       ./logs/"
++echo "============================================"
+diff --git a/sbatch/run_olmo2_1b_benchmark.sh b/sbatch/run_olmo2_1b_benchmark.sh
+new file mode 100755
+index 0000000..3102e6a
+--- /dev/null
++++ b/sbatch/run_olmo2_1b_benchmark.sh
+@@ -0,0 +1,423 @@
++#!/bin/bash
++# ============================================================================
++# allenai/OLMo-2-0425-1B — 2-bit PTQ benchmark: DOML K31 chain + TesseraQ (Nibi)
++# ============================================================================
++#
++# Sister script to run_llama3_1b_benchmark.sh / run_qwen_1.7b_benchmark.sh,
++# extended to the new-model generalization arm (2026-07-24). Dispatches one
++# sbatch job per method:
++#
++#   doml     — the full honest DOML K31 chain (the recipe of every rerun
++#              DOML paper row; scripts/research/doml_pipeline.sh precedent):
++#                doml_group_refit --run  (build: λ rd-split, g256 codebook
++#                    groups, fp8-e4m3 codebooks, hdiag cb weighting,
++#                    intra-block GPTQ, refit-iters 2, bulk-K 2)
++#              → k31_block_tune          (stage-1 output-aware level tune)
++#              → k31_assign_tune --mode pair  (stage-2 assignment tune;
++#                    on failure the btuned container ships — tracker
++#                    precedent, still a complete honest DOML row)
++#              → k29_honest_bpw          (honest bpw of the shipped container)
++#              → doml_group_refit --restore-dpk ... --eval-extra-ppl
++#                    --full-eval         (wt2/c4/ptb + MMLU/HellaSwag/ARC)
++#
++#   tesseraq — TesseraQ paper-exact (ICLR 2025 recipe, identical arguments
++#              to every other model's tesseraq cell in this suite).
++#
++# Model facts: OLMo-2-0425-1B, Olmo2ForCausalLM (norm-after arch), fp32 checkpoint loaded bf16. Dev-box K31 chain wall (24 GB slice, batch2): build 2583s + btune 689s + atune 2221s + eval 1672s ≈ 2.0 h.
++#
++# Dev-box measurements (2026-07-24, Blackwell MIG slices — used for sizing,
++# never undercut):
++#   - DOML build+tunes for the 1B/2B class fit a 24 GB slice at the batch/
++#     stream-chunk knobs pinned below. 2g.20gb (20 GB) is SMALLER than that
++#     proven envelope ⇒ DOML chain jobs use 3g.40gb.
++#   - TesseraQ paper-exact peaked >23.6 GB GPU (OOMed a 24 GB slice; needs
++#     ~27 GB) and >100 GB host RSS ⇒ full h100 + 160 G, the house tesseraq
++#     precedent for this size class (4g.40gb is NOT provisioned on Nibi,
++#     Gotcha #33 — the house 1.7B tesseraq profile is GPU_FULL + 160G).
++#
++# PREREQ: nibi_sync.patch applied (the olmo2 family mappings in run.py /
++# src/eval_utils.py / src/run_tesseraq.py and the kernels/pack fixes are
++# uncommitted on the dev box — without them every job here crashes with
++# "Unsupported model"), and ./sbatch/download_cache.sh re-run (fetches
++# allenai/OLMo-2-0425-1B + the namespaced wikitext repo).
++#
++# Usage:
++#   ./sbatch/run_olmo2_1b_benchmark.sh                      # submit both jobs
++#   ./sbatch/run_olmo2_1b_benchmark.sh --account def-foo
++#   ./sbatch/run_olmo2_1b_benchmark.sh --local              # run serially, no SLURM
++#
++# ============================================================================
++
++# ============================================================================
++# COMMAND LINE ARGUMENTS
++# ============================================================================
++
++ACCOUNT=""
++LOCAL_MODE=false
++
++while [[ $# -gt 0 ]]; do
++    case $1 in
++        --account)
++            ACCOUNT="$2"
++            shift 2
++            ;;
++        --local)
++            LOCAL_MODE=true
++            shift
++            ;;
++        *)
++            echo "Unknown option: $1"
++            echo "Usage: $0 [--account SLURM_ACCOUNT] [--local]"
++            exit 1
++            ;;
++    esac
++done
++
++# ============================================================================
++# CONFIGURATION
++# ============================================================================
++
++MODEL="allenai/OLMo-2-0425-1B"
++MODEL_SHORT="olmo2_1b"
++MODEL_SUB="olmo2-1b"                # downloads/doml_dumps/<sub>/ dump subdir
++DATASET="wikitext2"
++SEED=0
++
++# HF cache directory uses the canonical models--<org>--<repo> layout.
++MODEL_CACHE_DIR="models--allenai--OLMo-2-0425-1B"
++
++CSV_NAME="${MODEL_SHORT}_ptq_benchmark.csv"
++CSV_ABS="$(pwd)/results/$CSV_NAME"
++
++# ----------------------------------------------------------------------------
++# DOML λ (rd-split rate weight) — PROVISIONAL best-known rate-matched pick.
++# 19e-5 beat the 16e-5 arm on the dev box (honest bpw 2.1855, rate-matched; 2026-07-24).
++# Re-pick only if the honest-bpw log lands far off the ≤2.25-class target
++# (tracker λ-audit rule). The dump dir name tracks this value.
++# ----------------------------------------------------------------------------
++DOML_LAMBDA="19e-5"
++# Tune-stage memory knobs, measured on the dev box for THIS model (24 GB
++# slice envelope). Do not raise on MIG slices without re-measuring.
++DOML_BATCH=2
++DOML_SCHUNK=2
++DOML_DUMP_DIR="downloads/doml_dumps/${MODEL_SUB}/k31-olmo2-lam${DOML_LAMBDA}-g256"
++
++# Nibi GRES strings. Full long-form MIG names are REQUIRED — short forms
++# like `1g.10gb` are rejected (Gotcha #11). 4g.40gb is NOT provisioned
++# (Gotcha #33; sinfo confirms).
++GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
++GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
++GPU_LARGE="--gres=gpu:nvidia_h100_80gb_hbm3_3g.40gb:1"
++GPU_FULL="--gres=gpu:h100:1"
++
++# TesseraQ paper-exact settings (identical to every other model's tesseraq
++# cell in this suite — run_qwen_1.7b_benchmark.sh precedent).
++TESSERAQ_BIT=2
++TESSERAQ_GROUPSIZE=128
++TESSERAQ_ITERATIONS=250
++TESSERAQ_BATCH_SIZE=4
++TESSERAQ_NSAMPLES=512
++
++# Methods to benchmark — one sbatch job per entry.
++techniques=(
++    "doml"
++    "tesseraq"
++)
++
++# ============================================================================
++# HELPER FUNCTIONS
++# ============================================================================
++
++get_job_resources() {
++    # Sets: gpu_resource, cpus, mem
++    case $1 in
++        doml)
++            # Full K31 chain. Dev-box proven envelope is a 24 GB slice at
++            # batch $DOML_BATCH; 2g.20gb (20 GB) undercuts it ⇒ 3g.40gb.
++            # Host RAM: 64G = 2× the house 32G DOML budget (container +
++            # calib + restore copies).
++            gpu_resource="$GPU_LARGE"
++            cpus=8
++            mem="64G"
++            ;;
++        tesseraq)
++            # Paper-exact TesseraQ (iter=250, bsz=4, nsamples=512). Dev-box:
++            # >23.6 GB GPU (OOMed 24 GB) and >100 GB RSS. House precedent
++            # for this size class (Qwen3-1.7B/Llama-3.2-1B): GPU_FULL + 160G.
++            gpu_resource="$GPU_FULL"
++            cpus=10
++            mem="160G"
++            ;;
++        *)
++            gpu_resource="$GPU_MEDIUM"
++            cpus=4
++            mem="32G"
++            ;;
++    esac
++}
++
++get_time_limit() {
++    # Alliance Nibi tiers: b1≤3h, b2≤12h, b3≤24h, b4≤72h, b5≤168h.
++    # tesseraq: house precedent ×1 (28 h, b4) — do NOT shrink.
++    # doml: dev-box chain wall + eval suite, ×2+ margin for the slower
++    #       per-SM Nibi MIG slice; never below the 05:00:00 house doml floor.
++    case $1 in
++        doml)      echo "10:00:00" ;;
++        tesseraq)  echo "28:00:00" ;;
++        *)         echo "05:00:00" ;;
++    esac
++}
++
++build_python_cmd() {
++    # Prints the job payload. doml emits the full multi-line K31 chain
++    # (idempotent stages, per-stage FATAL guards — requeued jobs resume);
++    # tesseraq emits the house one-liner. Everything except EVAL_DIR is
++    # resolved at submit time; \$EVAL_DIR survives to run at job time.
++    local technique=$1
++    local dd="$DOML_DUMP_DIR"
++
++    # --full_eval = PPL on (wikitext2,c4,ptb) + MMLU + HellaSwag + ARC-Easy +
++    # ARC-Challenge. Each task writes its own row to BILLM_BENCH_CSV.
++    local common_evals="--full_eval"
++
++    case $technique in
++        doml)
++            cat <<CHAIN
++mkdir -p downloads/doml_dumps/${MODEL_SUB}
++echo "=== [1/5] DOML K31 build (lam=${DOML_LAMBDA}, g256, fp8 cb, hdiag, intra-block GPTQ, refit2, bulk-K2, rd-split) ==="
++if [ ! -f "${dd}/manifest.json" ]; then
++    python3 -u kernels/pack/doml_group_refit.py --run --model $MODEL --g 256 --dump-dir "${dd}" --codebook-dtype float8_e4m3fn --cb-weight hdiag --intra-block-gptq --refit-iters 2 --bulk-k 2 --rd-split $DOML_LAMBDA || { echo "FATAL: doml build failed"; exit 1; }
++else
++    echo "build manifest exists — skipping (idempotent resume)"
++fi
++echo "=== [2/5] stage-1 block tune (batch $DOML_BATCH / stream-chunk $DOML_SCHUNK) ==="
++if [ ! -f "${dd}-btuned/manifest.json" ]; then
++    python3 -u kernels/pack/k31_block_tune.py --src "${dd}" --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || { echo "FATAL: k31_block_tune failed"; exit 1; }
++else
++    echo "btuned manifest exists — skipping (idempotent resume)"
++fi
++echo "=== [3/5] stage-2 assignment tune (pair mode) ==="
++EVAL_DIR="${dd}-btuned"
++if [ ! -f "${dd}-atuned/manifest.json" ]; then
++    python3 -u kernels/pack/k31_assign_tune.py --src "${dd}-btuned" --mode pair --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || echo "WARN: k31_assign_tune failed — shipping the btuned container (tracker precedent: btuned is a complete honest DOML row)"
++else
++    echo "atuned manifest exists — skipping (idempotent resume)"
++fi
++if [ -f "${dd}-atuned/manifest.json" ] && ls "${dd}-atuned"/*.dpk.safetensors >/dev/null 2>&1; then
++    EVAL_DIR="${dd}-atuned"
++fi
++echo "=== [4/5] honest bpw (k29, on \$EVAL_DIR) ==="
++python3 -u kernels/pack/k29_honest_bpw.py --dir "\$EVAL_DIR" || { echo "FATAL: k29_honest_bpw failed"; exit 1; }
++echo "=== [5/5] restore + full eval (\$EVAL_DIR) ==="
++python3 -u kernels/pack/doml_group_refit.py --run --restore-dpk "\$EVAL_DIR" --eval-extra-ppl --full-eval || { echo "FATAL: restore eval failed"; exit 1; }
++CHAIN
++            ;;
++        tesseraq)
++            # Paper-faithful TesseraQ (AWQ init + PAR + grad-clip + bfloat16
++            # autocast + batched forward) — house command verbatim.
++            echo "python3 -u src/run_tesseraq.py $MODEL $DATASET --bit $TESSERAQ_BIT --group_size $TESSERAQ_GROUPSIZE --iterations $TESSERAQ_ITERATIONS --batch_size $TESSERAQ_BATCH_SIZE --nsamples $TESSERAQ_NSAMPLES --seed $SEED --device cuda:0 $common_evals"
++            ;;
++        *)
++            echo "echo 'Unknown technique: $technique'; exit 1"
++            ;;
++    esac
++}
++
++get_technique_desc() {
++    case $1 in
++        doml)      echo "DOML K31 chain (lam=$DOML_LAMBDA g256 fp8-cb hdiag intra-gptq refit2 bulkK2 rd-split -> btune -> atune pair -> honest bpw -> full eval)" ;;
++        tesseraq)  echo "TesseraQ paper-exact (bit=$TESSERAQ_BIT, gs=$TESSERAQ_GROUPSIZE, iters=$TESSERAQ_ITERATIONS, bsz=$TESSERAQ_BATCH_SIZE, nsamples=$TESSERAQ_NSAMPLES, AWQ init on)" ;;
++    esac
++}
++
++# ============================================================================
++# MAIN LOOP
++# ============================================================================
++
++job_count=0
++mkdir -p ./logs ./results
++
++echo "============================================"
++echo "$MODEL PTQ Benchmark Suite (Nibi)"
++echo "============================================"
++echo "Model:       $MODEL"
++echo "Dataset:     $DATASET"
++echo "Seed:        $SEED"
++echo "DOML lam:    $DOML_LAMBDA (provisional rate-matched pick)"
++echo "Techniques:  ${techniques[*]}"
++echo "Shared CSV:  $CSV_ABS"
++echo "Logs:        ./logs/"
++echo "============================================"
++echo ""
++
++for technique in "${techniques[@]}"; do
++    technique_desc=$(get_technique_desc "$technique")
++    time_limit=$(get_time_limit "$technique")
++    get_job_resources "$technique"
++
++    job_name="${MODEL_SHORT}_${technique}"
++    python_cmd=$(build_python_cmd "$technique")
++
++    if [[ "$LOCAL_MODE" == true ]]; then
++        echo "========================================"
++        echo "Running locally: $job_name"
++        echo "Config: $technique_desc"
++        echo "Command: $python_cmd"
++        echo "========================================"
++        if [[ -n "${SCRATCH:-}" && -d "${SCRATCH}" ]]; then
++            CACHE_ROOT_LOCAL="$SCRATCH/billm2_cache"
++            DOWNLOADS_LOCAL="$CACHE_ROOT_LOCAL/downloads"
++        else
++            CACHE_ROOT_LOCAL="$(pwd)"
++            DOWNLOADS_LOCAL="$(pwd)/downloads"
++        fi
++        if [[ "$DOWNLOADS_LOCAL" != "$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++            ln -sfn "$DOWNLOADS_LOCAL" ./downloads
++        fi
++        export BILLM_BENCH_CSV="$CSV_ABS"
++        export BILLM_DOWNLOADS_DIR="$DOWNLOADS_LOCAL"
++        export HF_HOME="$CACHE_ROOT_LOCAL/hf"
++        export HF_HUB_CACHE="$BILLM_DOWNLOADS_DIR"
++        export HF_DATASETS_CACHE="$CACHE_ROOT_LOCAL/hf/datasets"
++        export TORCH_HOME="$CACHE_ROOT_LOCAL/torch"
++        export HF_HUB_DISABLE_XET=1
++        export NUMBA_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/numba"
++        export PIP_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/pip"
++        export XDG_CACHE_HOME="$CACHE_ROOT_LOCAL/.cache"
++        export TMPDIR="${SLURM_TMPDIR:-$CACHE_ROOT_LOCAL/tmp}"
++        mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
++                 "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR" \
++                 "$BILLM_DOWNLOADS_DIR"
++        export HF_DATASETS_OFFLINE=1
++        export TRANSFORMERS_OFFLINE=1
++        export HF_HUB_OFFLINE=1
++        export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/src
++        export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++        eval "$python_cmd"
++        ((job_count++))
++        continue
++    fi
++
++    account_line=""
++    if [[ -n "$ACCOUNT" ]]; then
++        account_line="#SBATCH --account=$ACCOUNT"
++    fi
++
++    sbatch_id=$(sbatch --parsable <<EOF
++#!/bin/bash
++#SBATCH --job-name=$job_name
++#SBATCH --output=./logs/${job_name}_%j.out
++#SBATCH --error=./logs/${job_name}_%j.err
++#SBATCH --time=$time_limit
++#SBATCH $gpu_resource
++#SBATCH --cpus-per-task=$cpus
++#SBATCH --mem=$mem
++#SBATCH --ntasks-per-node=1
++#SBATCH --nodes=1
++$account_line
++
++module load gcc arrow scipy-stack cuda cudnn
++source ./env/bin/activate
++# Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
++# tqdm / accelerate / typing_extensions from \$HOME/.local/. Do NOT set
++# PYTHONNOUSERSITE=1 here.
++
++if [[ -n "\${SCRATCH:-}" && -d "\${SCRATCH}" ]]; then
++    CACHE_ROOT="\$SCRATCH/billm2_cache"
++else
++    CACHE_ROOT="\$(pwd)/downloads"
++fi
++
++if [[ "\$CACHE_ROOT" != "\$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++    ln -sfn "\$CACHE_ROOT" ./downloads
++fi
++
++export BILLM_DOWNLOADS_DIR="\$CACHE_ROOT/downloads"
++export HF_HOME="\$CACHE_ROOT/hf"
++export HF_HUB_CACHE="\$BILLM_DOWNLOADS_DIR"
++export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
++export TORCH_HOME="\$CACHE_ROOT/torch"
++export HF_HUB_DISABLE_XET=1
++export NUMBA_CACHE_DIR="\$CACHE_ROOT/.cache/numba"
++export PIP_CACHE_DIR="\$CACHE_ROOT/.cache/pip"
++export XDG_CACHE_HOME="\$CACHE_ROOT/.cache"
++if [[ -n "\${SLURM_TMPDIR:-}" && -d "\${SLURM_TMPDIR}" ]]; then
++    export TMPDIR="\$SLURM_TMPDIR"
++else
++    export TMPDIR="\$CACHE_ROOT/tmp"
++fi
++mkdir -p "\$HF_HOME" "\$HF_DATASETS_CACHE" "\$HF_HUB_CACHE" "\$TORCH_HOME" \\
++         "\$NUMBA_CACHE_DIR" "\$PIP_CACHE_DIR" "\$XDG_CACHE_HOME" "\$TMPDIR" \\
++         "\$BILLM_DOWNLOADS_DIR"
++
++export HF_DATASETS_OFFLINE=1
++export TRANSFORMERS_OFFLINE=1
++export HF_HUB_OFFLINE=1
++
++export BILLM_BENCH_CSV="$CSV_ABS"
++
++# kernels/pack tools resolve the repo root from CRB_REPO (rerun-campaign fix).
++export CRB_REPO="\$(pwd)"
++
++export PYTHONPATH=\$PYTHONPATH:\$(pwd):\$(pwd)/src
++
++# Tune stages / TesseraQ on MIG slices need expandable segments (tracker
++# lesson 2026-07-22; same fix as LNQ Fisher).
++export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++
++echo '========================================'
++echo "Job:        $job_name"
++echo "Model:      $MODEL"
++echo "Technique:  $technique"
++echo "Config:     $technique_desc"
++echo "Dataset:    $DATASET"
++echo "Seed:       $SEED"
++echo "Time limit: $time_limit"
++echo "GPU:        $gpu_resource"
++echo "CPUs / Mem: $cpus / $mem"
++echo "CSV:        \$BILLM_BENCH_CSV"
++echo "Cache root: \$CACHE_ROOT (\$HF_HOME)"
++echo "TMPDIR:     \$TMPDIR"
++echo "Started:    \$(date)"
++echo "SLURM job:  \$SLURM_JOB_ID"
++echo '========================================'
++echo "Python:             \$(which python)"
++python --version
++echo "CUDA_VISIBLE_DEVICES=\$CUDA_VISIBLE_DEVICES"
++# Sanity check: aborts before GPU time is spent if the venv is broken or
++# too old for this model family.
++python -c "from transformers.models.olmo2 import Olmo2ForCausalLM; import transformers; print('transformers', transformers.__version__)" || {
++    echo "FATAL: Olmo2ForCausalLM not importable — transformers is too old (<4.47) for OLMo-2."
++    exit 1
++}
++ls -d "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR 2>/dev/null || {
++    echo "FATAL: no $MODEL snapshot under \$BILLM_DOWNLOADS_DIR — run ./sbatch/download_cache.sh first."
++    exit 1
++}
++# Phase 11: refs/main is a prerequisite for offline from_pretrained under
++# HF_HUB_OFFLINE=1 (Gotcha #22).
++for _refs in "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR/refs/main; do
++    [ -s "\$_refs" ] || {
++        echo "FATAL: \$_refs missing or empty."
++        echo "       Re-run ./sbatch/download_cache.sh — needs"
++        echo "       snapshot_download(..., local_files_only=True) second pass."
++        exit 1
++    }
++done
++nvidia-smi || true
++$python_cmd
++echo '========================================'
++echo "Finished:   \$(date)"
++echo '========================================'
++EOF
++)
++    echo "  [$sbatch_id] $job_name  ($technique_desc, t=${time_limit}, gpu=${gpu_resource#--gres=gpu:})"
++    ((job_count++))
++done
++
++echo ""
++echo "============================================"
++echo "Total jobs submitted: $job_count"
++echo "Results CSV:          $CSV_ABS"
++echo "Logs directory:       ./logs/"
++echo "============================================"
+diff --git a/sbatch/run_sdoml_sweep.sh b/sbatch/run_sdoml_sweep.sh
+new file mode 100755
+index 0000000..ecac51b
+--- /dev/null
++++ b/sbatch/run_sdoml_sweep.sh
+@@ -0,0 +1,462 @@
++#!/bin/bash
++# ============================================================================
++# SDOML sparsity sweep — Qwen3-1.7B + Llama-3.2-1B (Nibi / Alliance Canada)
++# ============================================================================
++#
++# Fills every missing SDOML cell of the nips26 tab:sparse / tab:bpw_sparse
++# tables (rerun mandate, llmdocs/tracker/RERUN_2026-07-22_paper_doml_sdoml.md
++# §D): s ∈ {5,20,25,40,50,75} on BOTH models, plus SDOML+partition asymmetric
++# s ∈ {20,50} on both models. One sbatch job per (model, config); 16 jobs.
++#
++# Two payload kinds:
++#
++#   sdoml-sNN  — the FULL honest-container chain (the recipe that produced
++#     the verified 2.25-bpw frontier, llmdocs/cuda_kernel/SDOML_honest_frontier.md
++#     §5/§8, smoke-tested on the dev box 2026-07-23, sdoml_17b_s{0,5} logs):
++#         sdoml_dump --run             (BASE container, g128, bf16 cb)
++#       → sdoml_honest_bpw            (base reference bpw)
++#       → sdoml_block_tune            (stage-1 levels; casts cb to fp8-e4m3,
++#                                      -0.25 bpw; --batch 4 --stream-chunk 4)
++#       → sdoml_assign_tune --mode pair  (stage-2 assignments, zero bit cost;
++#                                      --batch 2 --stream-chunk 2 — the knobs
++#                                      that survived the Llama-3.2-1B width;
++#                                      on failure the btuned container ships,
++#                                      tracker precedent = still a complete
++#                                      honest SDOML row)
++#       → sdoml_honest_bpw            (FINAL honest bpw → tab:bpw_sparse)
++#       → sdoml_restore_eval --eval-extra-ppl --full-eval
++#                                      (wt2/c4/ptb PPL + MMLU/HellaSwag/
++#                                       ARC-E/ARC-C → tab:sparse)
++#     NOTE — no λ / no --rd-split / no g256 in this chain: SDOML has no
++#     rate-distortion split stage (λ is a DOML-build knob), and the g256
++#     codebook refit was measured a DEAD END for SDOML (frontier doc §9:
++#     +4.2 wt2 / +18 c4 / +47 ptb for -0.125 bpw). The paper recipe is
++#     g128 + fp8-cb (via block-tune) + assignment-tune, exactly as below.
++#
++#   sdoml_part_asym-sNN — SDOML+partition asymmetric (S9), via the SAME
++#     run.py command the May cells were produced with (house precedent in
++#     run_qwen_1.7b_benchmark.sh / run_llama3_1b_benchmark.sh):
++#         run.py <model> wikitext2 sdoml_partition --sparsity s
++#                --sdoml_asymmetric ... --full_eval
++#     There is NO container/honest-bpw tooling for the asymmetric arm (the
++#     frontier doc dead-ended it as an iterable vehicle); its bpw stays the
++#     analytic eq:bpw_asym value. Flagged in llmdocs/NIBI_SUBMISSION.md.
++#
++# Each job writes to its OWN CSV (results/sdoml_sweep_<model>_<config>.csv)
++# so the rerun campaign's cells never mix with the April *_ptq_benchmark.csv
++# rows. Dump dirs are per-(model, s) — collision-free by construction.
++#
++# Chain stages are idempotent (skip on existing manifest.json), so a
++# requeued job resumes past finished stages.
++#
++# PREREQ: nibi_sync.patch applied (kernels/pack tools + run.py fixes are
++# uncommitted on the dev box; without them sdoml_restore_eval has no
++# --full-eval and the tools carry a hardcoded /workspace/BiLLM2 path).
++#
++# Usage:
++#   ./sbatch/run_sdoml_sweep.sh                    # submit all 16
++#   ./sbatch/run_sdoml_sweep.sh --account def-foo  # with account
++#   ./sbatch/run_sdoml_sweep.sh --local            # run serially (smoke)
++#
++# ============================================================================
++
++# ============================================================================
++# COMMAND LINE ARGUMENTS
++# ============================================================================
++
++ACCOUNT=""
++LOCAL_MODE=false
++
++while [[ $# -gt 0 ]]; do
++    case $1 in
++        --account)
++            ACCOUNT="$2"
++            shift 2
++            ;;
++        --local)
++            LOCAL_MODE=true
++            shift
++            ;;
++        *)
++            echo "Unknown option: $1"
++            echo "Usage: $0 [--account SLURM_ACCOUNT] [--local]"
++            exit 1
++            ;;
++    esac
++done
++
++# ============================================================================
++# CONFIGURATION
++# ============================================================================
++
++DATASET="wikitext2"
++SEED=0
++BLOCKSIZE=128
++SALIENT_METRIC="magnitude"
++
++# Models: HF name | short (CSV/job names) | dump-dir sub | HF cache dir |
++#         asym walltime (house precedent from the per-model benchmark script)
++MODELS=(
++    "Qwen/Qwen3-1.7B|qwen3_1.7b|qwen3-1.7b|models--Qwen--Qwen3-1.7B|36:00:00"
++    "meta-llama/Llama-3.2-1B|llama3_1b|llama3.2-1b|models--meta-llama--Llama-3.2-1B|26:00:00"
++)
++
++# Nibi GRES strings. Full long-form MIG names are REQUIRED — short forms
++# like `1g.10gb` are rejected (Gotcha #11). 4g.40gb is NOT provisioned
++# (Gotcha #33; sinfo confirms — jobs requesting it die silently).
++GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
++GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
++GPU_LARGE="--gres=gpu:nvidia_h100_80gb_hbm3_3g.40gb:1"
++GPU_FULL="--gres=gpu:h100:1"
++
++# One job per (model, config). tab:sparse missing cells (tracker §D).
++techniques=(
++    # SDOML — base K=4 single-codebook (partition=1), full honest chain.
++    "sdoml-s5"
++    "sdoml-s20"
++    "sdoml-s25"
++    "sdoml-s40"
++    "sdoml-s50"
++    "sdoml-s75"
++    # SDOML — asymmetric partition (S9 Pareto extension), bulk-only mask.
++    "sdoml_part_asym-s20"
++    "sdoml_part_asym-s50"
++)
++
++# ============================================================================
++# HELPER FUNCTIONS
++# ============================================================================
++
++get_job_resources() {
++    # Sets: gpu_resource, cpus, mem
++    #
++    # sdoml-s* (chain): the tune stages are the driver, not the base dump.
++    #   Dev-box measurements (tracker, 2026-07-22/23): assignment-tune used
++    #   29–35 GB on the old A40s at batch 8; on 24 GB slices 1.7B needed
++    #   batch4 and Llama-3.2-1B OOM'd even at batch4 (wider MLP, 8192) and
++    #   needed batch2. 2g.20gb (20 GB) is BELOW the only proven envelope, so
++    #   the smallest known-good Nibi profile is 3g.40gb — no smaller slice
++    #   has ever run these tune stages. Host RAM: model + containers +
++    #   activation streams are GPU-side; 64G doubles the 32G house DOML
++    #   budget for the extra per-stage CPU copies.
++    #
++    # sdoml_part_asym-s*: house precedent VERBATIM (run_qwen_1.7b_benchmark.sh
++    #   / run_llama3_1b_benchmark.sh sdoml_part_asym-s* case — 2g.20gb, 4 cpus,
++    #   32G; these exact profiles produced the May asym rows).
++    case $1 in
++        sdoml-s*)
++            gpu_resource="$GPU_LARGE"
++            cpus=8
++            mem="64G"
++            ;;
++        sdoml_part_asym-s*)
++            gpu_resource="$GPU_MEDIUM"
++            cpus=4
++            mem="32G"
++            ;;
++        *)
++            gpu_resource="$GPU_MEDIUM"
++            cpus=4
++            mem="32G"
++            ;;
++    esac
++}
++
++get_time_limit() {
++    # Alliance Nibi partition tiers: b1≤3h, b2≤12h, b3≤24h, b4≤72h, b5≤168h.
++    # Walltimes nudged off boundaries so SLURM routes unambiguously.
++    #
++    # sdoml-s* chain: dev-box wall (Blackwell 24 GB slice, 1.7B smoke) was
++    #   dump ~25 min + btune 26 min + atune ~40 min + bpw ~min + eval suite.
++    #   Nibi 3g.40gb is slower per-SM; with the house 60–90 min eval-suite
++    #   budget and 2× compute margin the chain lands ≈5–6 h ⇒ 10:00:00 (b2).
++    #   Do NOT shrink below the 05:00:00 single-stage sdoml-s* precedent.
++    # sdoml_part_asym-s*: house precedent ×1 (per-row loop fallback dominates;
++    #   36 h on Qwen3-1.7B, 26 h on Llama-3.2-1B — passed per model below).
++    case $1 in
++        sdoml-s*)            echo "10:00:00" ;;  # b2 — full chain + eval suite
++        sdoml_part_asym-s*)  echo "$MODEL_ASYM_TIME" ;;  # house precedent ×1
++        *)                   echo "10:00:00" ;;
++    esac
++}
++
++build_python_cmd() {
++    # Prints the job payload for a given config. sdoml-s* emits the full
++    # multi-line chain (idempotent stages, per-stage FATAL guards, mirroring
++    # the dev-box sdoml_one.sh driver); sdoml_part_asym-s* emits the house
++    # one-liner. Everything except EVAL_DIR is resolved at submit time;
++    # \$EVAL_DIR survives to run at job time.
++    local technique=$1
++    local s_pct s_frac dd
++
++    # --full_eval = PPL on (wikitext2,c4,ptb) + MMLU + HellaSwag + ARC-Easy +
++    # ARC-Challenge. Each task writes its own row to BILLM_BENCH_CSV.
++    local common_evals="--full_eval"
++
++    case $technique in
++        sdoml-s*)
++            s_pct=${technique#sdoml-s}
++            if [[ "$s_pct" -lt 10 ]]; then s_frac="0.0${s_pct}"; else s_frac="0.${s_pct}"; fi
++            dd="downloads/doml_dumps/${MODEL_SUB}/sdoml-s${s_pct}"
++            cat <<CHAIN
++mkdir -p downloads/doml_dumps/${MODEL_SUB}
++echo "=== [1/6] SDOML base dump -> ${dd} ==="
++if [ ! -f "${dd}/manifest.json" ]; then
++    python3 -u kernels/pack/sdoml_dump.py --run --model $MODEL --sparsity $s_frac --dump-dir "${dd}" || { echo "FATAL: sdoml_dump failed"; exit 1; }
++else
++    echo "dump manifest exists — skipping (idempotent resume)"
++fi
++echo "=== [2/6] honest bpw (base, bf16 cb) ==="
++python3 -u kernels/pack/sdoml_honest_bpw.py --dir "${dd}" || { echo "FATAL: base honest_bpw failed"; exit 1; }
++echo "=== [3/6] stage-1 block tune (levels -> fp8-e4m3 cb) ==="
++if [ ! -f "${dd}-btuned/manifest.json" ]; then
++    python3 -u kernels/pack/sdoml_block_tune.py --src "${dd}" --batch 4 --stream-chunk 4 || { echo "FATAL: sdoml_block_tune failed"; exit 1; }
++else
++    echo "btuned manifest exists — skipping (idempotent resume)"
++fi
++echo "=== [4/6] stage-2 assignment tune (pair mode, zero bit cost) ==="
++EVAL_DIR="${dd}-btuned"
++if [ ! -f "${dd}-atuned/manifest.json" ]; then
++    python3 -u kernels/pack/sdoml_assign_tune.py --src "${dd}-btuned" --mode pair --batch 2 --stream-chunk 2 || echo "WARN: sdoml_assign_tune failed — shipping the btuned container (tracker precedent: btuned is a complete honest SDOML row)"
++else
++    echo "atuned manifest exists — skipping (idempotent resume)"
++fi
++if [ -f "${dd}-atuned/manifest.json" ] && ls "${dd}-atuned"/*.sdpk.safetensors >/dev/null 2>&1; then
++    EVAL_DIR="${dd}-atuned"
++fi
++echo "=== [5/6] honest bpw (FINAL: \$EVAL_DIR) — the tab:bpw_sparse number ==="
++python3 -u kernels/pack/sdoml_honest_bpw.py --dir "\$EVAL_DIR" || { echo "FATAL: final honest_bpw failed"; exit 1; }
++echo "=== [6/6] restore + full eval (\$EVAL_DIR) ==="
++python3 -u kernels/pack/sdoml_restore_eval.py --dir "\$EVAL_DIR" --eval-extra-ppl --full-eval || { echo "FATAL: sdoml_restore_eval failed"; exit 1; }
++CHAIN
++            ;;
++        sdoml_part_asym-s*)
++            # House command verbatim (run_qwen_1.7b_benchmark.sh /
++            # run_llama3_1b_benchmark.sh sdoml_part_asym-s* case).
++            s_pct=${technique#sdoml_part_asym-s}
++            if [[ "$s_pct" -lt 10 ]]; then s_frac="0.0${s_pct}"; else s_frac="0.${s_pct}"; fi
++            echo "python3 -u run.py $MODEL $DATASET sdoml_partition --sparsity $s_frac --sdoml_asymmetric --blocksize $BLOCKSIZE --salient_metric $SALIENT_METRIC --seed $SEED --device cuda:0 $common_evals"
++            ;;
++        *)
++            echo "echo 'Unknown technique: $technique'; exit 1"
++            ;;
++    esac
++}
++
++get_technique_desc() {
++    case $1 in
++        sdoml-s*)            echo "SDOML honest chain (dump -> btune fp8 -> atune pair -> honest bpw -> full eval), s pattern" ;;
++        sdoml_part_asym-s*)  echo "SDOML+partition asymmetric (s_bulk pattern, mid+salient dense, S9) via run.py, full eval" ;;
++    esac
++}
++
++# ============================================================================
++# MAIN LOOP
++# ============================================================================
++
++job_count=0
++mkdir -p ./logs ./results
++
++echo "============================================"
++echo "SDOML Sparsity Sweep (Nibi) — tab:sparse / tab:bpw_sparse"
++echo "============================================"
++echo "Models:      Qwen/Qwen3-1.7B + meta-llama/Llama-3.2-1B"
++echo "Dataset:     $DATASET (calibration + wt2 PPL; c4/ptb + downstream via full eval)"
++echo "Seed:        $SEED"
++echo "Techniques:  ${techniques[*]}"
++echo "CSVs:        ./results/sdoml_sweep_<model>_<config>.csv (one per job)"
++echo "Logs:        ./logs/"
++echo "============================================"
++echo ""
++
++for model_spec in "${MODELS[@]}"; do
++    IFS='|' read -r MODEL MODEL_SHORT MODEL_SUB MODEL_CACHE_DIR MODEL_ASYM_TIME <<< "$model_spec"
++
++    # Import sanity check per family (house pattern): aborts before GPU time
++    # is spent if the venv is broken.
++    if [[ "$MODEL" == Qwen/* ]]; then
++        import_check="from transformers.models.qwen3 import Qwen3ForCausalLM; import transformers; print('transformers', transformers.__version__)"
++        import_fatal="Qwen3ForCausalLM not importable — transformers is too old (<4.51)."
++    else
++        import_check="from transformers import LlamaForCausalLM; import transformers; print('transformers', transformers.__version__)"
++        import_fatal="LlamaForCausalLM not importable — check transformers install."
++    fi
++
++    for technique in "${techniques[@]}"; do
++        technique_desc=$(get_technique_desc "$technique")
++        time_limit=$(get_time_limit "$technique")
++        get_job_resources "$technique"
++
++        job_name="${MODEL_SHORT}_${technique}"
++        # Per-job CSV — never collides with the April *_ptq_benchmark.csv.
++        CSV_ABS="$(pwd)/results/sdoml_sweep_${MODEL_SHORT}_${technique}.csv"
++        python_cmd=$(build_python_cmd "$technique")
++
++        if [[ "$LOCAL_MODE" == true ]]; then
++            echo "========================================"
++            echo "Running locally: $job_name"
++            echo "Config: $technique_desc"
++            echo "Command: $python_cmd"
++            echo "========================================"
++            if [[ -n "${SCRATCH:-}" && -d "${SCRATCH}" ]]; then
++                CACHE_ROOT_LOCAL="$SCRATCH/billm2_cache"
++                DOWNLOADS_LOCAL="$CACHE_ROOT_LOCAL/downloads"
++            else
++                # Dev-box fallback: use the repo-root ./downloads directory that
++                # already holds the models. Don't append /downloads again.
++                CACHE_ROOT_LOCAL="$(pwd)"
++                DOWNLOADS_LOCAL="$(pwd)/downloads"
++            fi
++            if [[ "$DOWNLOADS_LOCAL" != "$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++                ln -sfn "$DOWNLOADS_LOCAL" ./downloads
++            fi
++            export BILLM_BENCH_CSV="$CSV_ABS"
++            export BILLM_DOWNLOADS_DIR="$DOWNLOADS_LOCAL"
++            export HF_HOME="$CACHE_ROOT_LOCAL/hf"
++            export HF_HUB_CACHE="$BILLM_DOWNLOADS_DIR"
++            export HF_DATASETS_CACHE="$CACHE_ROOT_LOCAL/hf/datasets"
++            export TORCH_HOME="$CACHE_ROOT_LOCAL/torch"
++            export HF_HUB_DISABLE_XET=1
++            export NUMBA_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/numba"
++            export PIP_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/pip"
++            export XDG_CACHE_HOME="$CACHE_ROOT_LOCAL/.cache"
++            export TMPDIR="${SLURM_TMPDIR:-$CACHE_ROOT_LOCAL/tmp}"
++            mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
++                     "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR" \
++                     "$BILLM_DOWNLOADS_DIR"
++            export HF_DATASETS_OFFLINE=1
++            export TRANSFORMERS_OFFLINE=1
++            export HF_HUB_OFFLINE=1
++            export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/src
++            export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++            eval "$python_cmd"
++            ((job_count++))
++            continue
++        fi
++
++        account_line=""
++        if [[ -n "$ACCOUNT" ]]; then
++            account_line="#SBATCH --account=$ACCOUNT"
++        fi
++
++        sbatch_id=$(sbatch --parsable <<EOF
++#!/bin/bash
++#SBATCH --job-name=$job_name
++#SBATCH --output=./logs/${job_name}_%j.out
++#SBATCH --error=./logs/${job_name}_%j.err
++#SBATCH --time=$time_limit
++#SBATCH $gpu_resource
++#SBATCH --cpus-per-task=$cpus
++#SBATCH --mem=$mem
++#SBATCH --ntasks-per-node=1
++#SBATCH --nodes=1
++$account_line
++
++module load gcc arrow scipy-stack cuda cudnn
++source ./env/bin/activate
++# Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
++# tqdm / accelerate / typing_extensions from \$HOME/.local/. Do NOT set
++# PYTHONNOUSERSITE=1 here.
++
++# Route every cache to \$SCRATCH (1 TB soft / 20 TB hard on Nibi).
++if [[ -n "\${SCRATCH:-}" && -d "\${SCRATCH}" ]]; then
++    CACHE_ROOT="\$SCRATCH/billm2_cache"
++else
++    CACHE_ROOT="\$(pwd)/downloads"
++fi
++
++# Re-create ./downloads -> \$CACHE_ROOT symlink defensively (datautils.py and
++# the kernels/pack tools use the relative './downloads' path for dump dirs).
++if [[ "\$CACHE_ROOT" != "\$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++    ln -sfn "\$CACHE_ROOT" ./downloads
++fi
++
++export BILLM_DOWNLOADS_DIR="\$CACHE_ROOT/downloads"
++export HF_HOME="\$CACHE_ROOT/hf"
++export HF_HUB_CACHE="\$BILLM_DOWNLOADS_DIR"
++export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
++export TORCH_HOME="\$CACHE_ROOT/torch"
++export HF_HUB_DISABLE_XET=1
++export NUMBA_CACHE_DIR="\$CACHE_ROOT/.cache/numba"
++export PIP_CACHE_DIR="\$CACHE_ROOT/.cache/pip"
++export XDG_CACHE_HOME="\$CACHE_ROOT/.cache"
++if [[ -n "\${SLURM_TMPDIR:-}" && -d "\${SLURM_TMPDIR}" ]]; then
++    export TMPDIR="\$SLURM_TMPDIR"
++else
++    export TMPDIR="\$CACHE_ROOT/tmp"
++fi
++mkdir -p "\$HF_HOME" "\$HF_DATASETS_CACHE" "\$HF_HUB_CACHE" "\$TORCH_HOME" \\
++         "\$NUMBA_CACHE_DIR" "\$PIP_CACHE_DIR" "\$XDG_CACHE_HOME" "\$TMPDIR" \\
++         "\$BILLM_DOWNLOADS_DIR"
++
++export HF_DATASETS_OFFLINE=1
++export TRANSFORMERS_OFFLINE=1
++export HF_HUB_OFFLINE=1
++
++export BILLM_BENCH_CSV="$CSV_ABS"
++
++# kernels/pack tools resolve the repo root from CRB_REPO (rerun-campaign fix;
++# falls back to 3× dirname of the tool file — set it explicitly anyway).
++export CRB_REPO="\$(pwd)"
++
++export PYTHONPATH=\$PYTHONPATH:\$(pwd):\$(pwd)/src
++
++# Tune stages on MIG slices need expandable segments (tracker lesson 2026-07-22:
++# prevents fragmentation-OOM in assignment tuning; same fix as LNQ Fisher).
++export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++
++echo '========================================'
++echo "Job:        $job_name"
++echo "Model:      $MODEL"
++echo "Technique:  $technique"
++echo "Config:     $technique_desc"
++echo "Dataset:    $DATASET"
++echo "Seed:       $SEED"
++echo "Time limit: $time_limit"
++echo "GPU:        $gpu_resource"
++echo "CPUs / Mem: $cpus / $mem"
++echo "CSV:        \$BILLM_BENCH_CSV"
++echo "Cache root: \$CACHE_ROOT (\$HF_HOME)"
++echo "TMPDIR:     \$TMPDIR"
++echo "Started:    \$(date)"
++echo "SLURM job:  \$SLURM_JOB_ID"
++echo '========================================'
++echo "Python:             \$(which python)"
++python --version
++echo "CUDA_VISIBLE_DEVICES=\$CUDA_VISIBLE_DEVICES"
++python -c "$import_check" || {
++    echo "FATAL: $import_fatal"
++    exit 1
++}
++ls -d "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR 2>/dev/null || {
++    echo "FATAL: no $MODEL snapshot under \$BILLM_DOWNLOADS_DIR — run ./sbatch/download_cache.sh first."
++    exit 1
++}
++# Phase 11: refs/main is a prerequisite for offline from_pretrained under
++# HF_HUB_OFFLINE=1 (Gotcha #22).
++for _refs in "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR/refs/main; do
++    [ -s "\$_refs" ] || {
++        echo "FATAL: \$_refs missing or empty."
++        echo "       Re-run ./sbatch/download_cache.sh — needs"
++        echo "       snapshot_download(..., local_files_only=True) second pass."
++        exit 1
++    }
++done
++nvidia-smi || true
++$python_cmd
++echo '========================================'
++echo "Finished:   \$(date)"
++echo '========================================'
++EOF
++)
++        echo "  [$sbatch_id] $job_name  ($technique_desc, t=${time_limit}, gpu=${gpu_resource#--gres=gpu:})"
++        ((job_count++))
++    done
++done
++
++echo ""
++echo "============================================"
++echo "Total jobs submitted: $job_count"
++echo "Results CSVs:         ./results/sdoml_sweep_*.csv (one per job)"
++echo "Logs directory:       ./logs/"
++echo "============================================"
+diff --git a/sbatch/run_smollm2_1.7b_benchmark.sh b/sbatch/run_smollm2_1.7b_benchmark.sh
+new file mode 100755
+index 0000000..792cf59
+--- /dev/null
++++ b/sbatch/run_smollm2_1.7b_benchmark.sh
+@@ -0,0 +1,423 @@
++#!/bin/bash
++# ============================================================================
++# HuggingFaceTB/SmolLM2-1.7B — 2-bit PTQ benchmark: DOML K31 chain + TesseraQ (Nibi)
++# ============================================================================
++#
++# Sister script to run_llama3_1b_benchmark.sh / run_qwen_1.7b_benchmark.sh,
++# extended to the new-model generalization arm (2026-07-24). Dispatches one
++# sbatch job per method:
++#
++#   doml     — the full honest DOML K31 chain (the recipe of every rerun
++#              DOML paper row; scripts/research/doml_pipeline.sh precedent):
++#                doml_group_refit --run  (build: λ rd-split, g256 codebook
++#                    groups, fp8-e4m3 codebooks, hdiag cb weighting,
++#                    intra-block GPTQ, refit-iters 2, bulk-K 2)
++#              → k31_block_tune          (stage-1 output-aware level tune)
++#              → k31_assign_tune --mode pair  (stage-2 assignment tune;
++#                    on failure the btuned container ships — tracker
++#                    precedent, still a complete honest DOML row)
++#              → k29_honest_bpw          (honest bpw of the shipped container)
++#              → doml_group_refit --restore-dpk ... --eval-extra-ppl
++#                    --full-eval         (wt2/c4/ptb + MMLU/HellaSwag/ARC)
++#
++#   tesseraq — TesseraQ paper-exact (ICLR 2025 recipe, identical arguments
++#              to every other model's tesseraq cell in this suite).
++#
++# Model facts: SmolLM2-1.7B, LlamaForCausalLM checkpoint, hidden=2048/24 layers. Dev-box K31 build (24 GB slice, batch4): 2213s; narrower MLP than Llama-3.2-1B lets batch4 fit.
++#
++# Dev-box measurements (2026-07-24, Blackwell MIG slices — used for sizing,
++# never undercut):
++#   - DOML build+tunes for the 1B/2B class fit a 24 GB slice at the batch/
++#     stream-chunk knobs pinned below. 2g.20gb (20 GB) is SMALLER than that
++#     proven envelope ⇒ DOML chain jobs use 3g.40gb.
++#   - TesseraQ paper-exact peaked >23.6 GB GPU (OOMed a 24 GB slice; needs
++#     ~27 GB) and >100 GB host RSS ⇒ full h100 + 160 G, the house tesseraq
++#     precedent for this size class (4g.40gb is NOT provisioned on Nibi,
++#     Gotcha #33 — the house 1.7B tesseraq profile is GPU_FULL + 160G).
++#
++# PREREQ: nibi_sync.patch applied (the smollm2 family mappings in run.py /
++# src/eval_utils.py / src/run_tesseraq.py and the kernels/pack fixes are
++# uncommitted on the dev box — without them every job here crashes with
++# "Unsupported model"), and ./sbatch/download_cache.sh re-run (fetches
++# HuggingFaceTB/SmolLM2-1.7B + the namespaced wikitext repo).
++#
++# Usage:
++#   ./sbatch/run_smollm2_1.7b_benchmark.sh                      # submit both jobs
++#   ./sbatch/run_smollm2_1.7b_benchmark.sh --account def-foo
++#   ./sbatch/run_smollm2_1.7b_benchmark.sh --local              # run serially, no SLURM
++#
++# ============================================================================
++
++# ============================================================================
++# COMMAND LINE ARGUMENTS
++# ============================================================================
++
++ACCOUNT=""
++LOCAL_MODE=false
++
++while [[ $# -gt 0 ]]; do
++    case $1 in
++        --account)
++            ACCOUNT="$2"
++            shift 2
++            ;;
++        --local)
++            LOCAL_MODE=true
++            shift
++            ;;
++        *)
++            echo "Unknown option: $1"
++            echo "Usage: $0 [--account SLURM_ACCOUNT] [--local]"
++            exit 1
++            ;;
++    esac
++done
++
++# ============================================================================
++# CONFIGURATION
++# ============================================================================
++
++MODEL="HuggingFaceTB/SmolLM2-1.7B"
++MODEL_SHORT="smollm2_1.7b"
++MODEL_SUB="smollm2-1.7b"                # downloads/doml_dumps/<sub>/ dump subdir
++DATASET="wikitext2"
++SEED=0
++
++# HF cache directory uses the canonical models--<org>--<repo> layout.
++MODEL_CACHE_DIR="models--HuggingFaceTB--SmolLM2-1.7B"
++
++CSV_NAME="${MODEL_SHORT}_ptq_benchmark.csv"
++CSV_ABS="$(pwd)/results/$CSV_NAME"
++
++# ----------------------------------------------------------------------------
++# DOML λ (rd-split rate weight) — PROVISIONAL best-known rate-matched pick.
++# 32e-5 is the dev-box rate-matched pick (mirrors the falcon3 landing; 16e-5 arm also run for comparison; 2026-07-24).
++# Re-pick only if the honest-bpw log lands far off the ≤2.25-class target
++# (tracker λ-audit rule). The dump dir name tracks this value.
++# ----------------------------------------------------------------------------
++DOML_LAMBDA="32e-5"
++# Tune-stage memory knobs, measured on the dev box for THIS model (24 GB
++# slice envelope). Do not raise on MIG slices without re-measuring.
++DOML_BATCH=4
++DOML_SCHUNK=4
++DOML_DUMP_DIR="downloads/doml_dumps/${MODEL_SUB}/k31-smollm2-lam${DOML_LAMBDA}-g256"
++
++# Nibi GRES strings. Full long-form MIG names are REQUIRED — short forms
++# like `1g.10gb` are rejected (Gotcha #11). 4g.40gb is NOT provisioned
++# (Gotcha #33; sinfo confirms).
++GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
++GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
++GPU_LARGE="--gres=gpu:nvidia_h100_80gb_hbm3_3g.40gb:1"
++GPU_FULL="--gres=gpu:h100:1"
++
++# TesseraQ paper-exact settings (identical to every other model's tesseraq
++# cell in this suite — run_qwen_1.7b_benchmark.sh precedent).
++TESSERAQ_BIT=2
++TESSERAQ_GROUPSIZE=128
++TESSERAQ_ITERATIONS=250
++TESSERAQ_BATCH_SIZE=4
++TESSERAQ_NSAMPLES=512
++
++# Methods to benchmark — one sbatch job per entry.
++techniques=(
++    "doml"
++    "tesseraq"
++)
++
++# ============================================================================
++# HELPER FUNCTIONS
++# ============================================================================
++
++get_job_resources() {
++    # Sets: gpu_resource, cpus, mem
++    case $1 in
++        doml)
++            # Full K31 chain. Dev-box proven envelope is a 24 GB slice at
++            # batch $DOML_BATCH; 2g.20gb (20 GB) undercuts it ⇒ 3g.40gb.
++            # Host RAM: 64G = 2× the house 32G DOML budget (container +
++            # calib + restore copies).
++            gpu_resource="$GPU_LARGE"
++            cpus=8
++            mem="64G"
++            ;;
++        tesseraq)
++            # Paper-exact TesseraQ (iter=250, bsz=4, nsamples=512). Dev-box:
++            # >23.6 GB GPU (OOMed 24 GB) and >100 GB RSS. House precedent
++            # for this size class (Qwen3-1.7B/Llama-3.2-1B): GPU_FULL + 160G.
++            gpu_resource="$GPU_FULL"
++            cpus=10
++            mem="160G"
++            ;;
++        *)
++            gpu_resource="$GPU_MEDIUM"
++            cpus=4
++            mem="32G"
++            ;;
++    esac
++}
++
++get_time_limit() {
++    # Alliance Nibi tiers: b1≤3h, b2≤12h, b3≤24h, b4≤72h, b5≤168h.
++    # tesseraq: house precedent ×1 (28 h, b4) — do NOT shrink.
++    # doml: dev-box chain wall + eval suite, ×2+ margin for the slower
++    #       per-SM Nibi MIG slice; never below the 05:00:00 house doml floor.
++    case $1 in
++        doml)      echo "10:00:00" ;;
++        tesseraq)  echo "28:00:00" ;;
++        *)         echo "05:00:00" ;;
++    esac
++}
++
++build_python_cmd() {
++    # Prints the job payload. doml emits the full multi-line K31 chain
++    # (idempotent stages, per-stage FATAL guards — requeued jobs resume);
++    # tesseraq emits the house one-liner. Everything except EVAL_DIR is
++    # resolved at submit time; \$EVAL_DIR survives to run at job time.
++    local technique=$1
++    local dd="$DOML_DUMP_DIR"
++
++    # --full_eval = PPL on (wikitext2,c4,ptb) + MMLU + HellaSwag + ARC-Easy +
++    # ARC-Challenge. Each task writes its own row to BILLM_BENCH_CSV.
++    local common_evals="--full_eval"
++
++    case $technique in
++        doml)
++            cat <<CHAIN
++mkdir -p downloads/doml_dumps/${MODEL_SUB}
++echo "=== [1/5] DOML K31 build (lam=${DOML_LAMBDA}, g256, fp8 cb, hdiag, intra-block GPTQ, refit2, bulk-K2, rd-split) ==="
++if [ ! -f "${dd}/manifest.json" ]; then
++    python3 -u kernels/pack/doml_group_refit.py --run --model $MODEL --g 256 --dump-dir "${dd}" --codebook-dtype float8_e4m3fn --cb-weight hdiag --intra-block-gptq --refit-iters 2 --bulk-k 2 --rd-split $DOML_LAMBDA || { echo "FATAL: doml build failed"; exit 1; }
++else
++    echo "build manifest exists — skipping (idempotent resume)"
++fi
++echo "=== [2/5] stage-1 block tune (batch $DOML_BATCH / stream-chunk $DOML_SCHUNK) ==="
++if [ ! -f "${dd}-btuned/manifest.json" ]; then
++    python3 -u kernels/pack/k31_block_tune.py --src "${dd}" --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || { echo "FATAL: k31_block_tune failed"; exit 1; }
++else
++    echo "btuned manifest exists — skipping (idempotent resume)"
++fi
++echo "=== [3/5] stage-2 assignment tune (pair mode) ==="
++EVAL_DIR="${dd}-btuned"
++if [ ! -f "${dd}-atuned/manifest.json" ]; then
++    python3 -u kernels/pack/k31_assign_tune.py --src "${dd}-btuned" --mode pair --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || echo "WARN: k31_assign_tune failed — shipping the btuned container (tracker precedent: btuned is a complete honest DOML row)"
++else
++    echo "atuned manifest exists — skipping (idempotent resume)"
++fi
++if [ -f "${dd}-atuned/manifest.json" ] && ls "${dd}-atuned"/*.dpk.safetensors >/dev/null 2>&1; then
++    EVAL_DIR="${dd}-atuned"
++fi
++echo "=== [4/5] honest bpw (k29, on \$EVAL_DIR) ==="
++python3 -u kernels/pack/k29_honest_bpw.py --dir "\$EVAL_DIR" || { echo "FATAL: k29_honest_bpw failed"; exit 1; }
++echo "=== [5/5] restore + full eval (\$EVAL_DIR) ==="
++python3 -u kernels/pack/doml_group_refit.py --run --restore-dpk "\$EVAL_DIR" --eval-extra-ppl --full-eval || { echo "FATAL: restore eval failed"; exit 1; }
++CHAIN
++            ;;
++        tesseraq)
++            # Paper-faithful TesseraQ (AWQ init + PAR + grad-clip + bfloat16
++            # autocast + batched forward) — house command verbatim.
++            echo "python3 -u src/run_tesseraq.py $MODEL $DATASET --bit $TESSERAQ_BIT --group_size $TESSERAQ_GROUPSIZE --iterations $TESSERAQ_ITERATIONS --batch_size $TESSERAQ_BATCH_SIZE --nsamples $TESSERAQ_NSAMPLES --seed $SEED --device cuda:0 $common_evals"
++            ;;
++        *)
++            echo "echo 'Unknown technique: $technique'; exit 1"
++            ;;
++    esac
++}
++
++get_technique_desc() {
++    case $1 in
++        doml)      echo "DOML K31 chain (lam=$DOML_LAMBDA g256 fp8-cb hdiag intra-gptq refit2 bulkK2 rd-split -> btune -> atune pair -> honest bpw -> full eval)" ;;
++        tesseraq)  echo "TesseraQ paper-exact (bit=$TESSERAQ_BIT, gs=$TESSERAQ_GROUPSIZE, iters=$TESSERAQ_ITERATIONS, bsz=$TESSERAQ_BATCH_SIZE, nsamples=$TESSERAQ_NSAMPLES, AWQ init on)" ;;
++    esac
++}
++
++# ============================================================================
++# MAIN LOOP
++# ============================================================================
++
++job_count=0
++mkdir -p ./logs ./results
++
++echo "============================================"
++echo "$MODEL PTQ Benchmark Suite (Nibi)"
++echo "============================================"
++echo "Model:       $MODEL"
++echo "Dataset:     $DATASET"
++echo "Seed:        $SEED"
++echo "DOML lam:    $DOML_LAMBDA (provisional rate-matched pick)"
++echo "Techniques:  ${techniques[*]}"
++echo "Shared CSV:  $CSV_ABS"
++echo "Logs:        ./logs/"
++echo "============================================"
++echo ""
++
++for technique in "${techniques[@]}"; do
++    technique_desc=$(get_technique_desc "$technique")
++    time_limit=$(get_time_limit "$technique")
++    get_job_resources "$technique"
++
++    job_name="${MODEL_SHORT}_${technique}"
++    python_cmd=$(build_python_cmd "$technique")
++
++    if [[ "$LOCAL_MODE" == true ]]; then
++        echo "========================================"
++        echo "Running locally: $job_name"
++        echo "Config: $technique_desc"
++        echo "Command: $python_cmd"
++        echo "========================================"
++        if [[ -n "${SCRATCH:-}" && -d "${SCRATCH}" ]]; then
++            CACHE_ROOT_LOCAL="$SCRATCH/billm2_cache"
++            DOWNLOADS_LOCAL="$CACHE_ROOT_LOCAL/downloads"
++        else
++            CACHE_ROOT_LOCAL="$(pwd)"
++            DOWNLOADS_LOCAL="$(pwd)/downloads"
++        fi
++        if [[ "$DOWNLOADS_LOCAL" != "$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++            ln -sfn "$DOWNLOADS_LOCAL" ./downloads
++        fi
++        export BILLM_BENCH_CSV="$CSV_ABS"
++        export BILLM_DOWNLOADS_DIR="$DOWNLOADS_LOCAL"
++        export HF_HOME="$CACHE_ROOT_LOCAL/hf"
++        export HF_HUB_CACHE="$BILLM_DOWNLOADS_DIR"
++        export HF_DATASETS_CACHE="$CACHE_ROOT_LOCAL/hf/datasets"
++        export TORCH_HOME="$CACHE_ROOT_LOCAL/torch"
++        export HF_HUB_DISABLE_XET=1
++        export NUMBA_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/numba"
++        export PIP_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/pip"
++        export XDG_CACHE_HOME="$CACHE_ROOT_LOCAL/.cache"
++        export TMPDIR="${SLURM_TMPDIR:-$CACHE_ROOT_LOCAL/tmp}"
++        mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
++                 "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR" \
++                 "$BILLM_DOWNLOADS_DIR"
++        export HF_DATASETS_OFFLINE=1
++        export TRANSFORMERS_OFFLINE=1
++        export HF_HUB_OFFLINE=1
++        export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/src
++        export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++        eval "$python_cmd"
++        ((job_count++))
++        continue
++    fi
++
++    account_line=""
++    if [[ -n "$ACCOUNT" ]]; then
++        account_line="#SBATCH --account=$ACCOUNT"
++    fi
++
++    sbatch_id=$(sbatch --parsable <<EOF
++#!/bin/bash
++#SBATCH --job-name=$job_name
++#SBATCH --output=./logs/${job_name}_%j.out
++#SBATCH --error=./logs/${job_name}_%j.err
++#SBATCH --time=$time_limit
++#SBATCH $gpu_resource
++#SBATCH --cpus-per-task=$cpus
++#SBATCH --mem=$mem
++#SBATCH --ntasks-per-node=1
++#SBATCH --nodes=1
++$account_line
++
++module load gcc arrow scipy-stack cuda cudnn
++source ./env/bin/activate
++# Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
++# tqdm / accelerate / typing_extensions from \$HOME/.local/. Do NOT set
++# PYTHONNOUSERSITE=1 here.
++
++if [[ -n "\${SCRATCH:-}" && -d "\${SCRATCH}" ]]; then
++    CACHE_ROOT="\$SCRATCH/billm2_cache"
++else
++    CACHE_ROOT="\$(pwd)/downloads"
++fi
++
++if [[ "\$CACHE_ROOT" != "\$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++    ln -sfn "\$CACHE_ROOT" ./downloads
++fi
++
++export BILLM_DOWNLOADS_DIR="\$CACHE_ROOT/downloads"
++export HF_HOME="\$CACHE_ROOT/hf"
++export HF_HUB_CACHE="\$BILLM_DOWNLOADS_DIR"
++export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
++export TORCH_HOME="\$CACHE_ROOT/torch"
++export HF_HUB_DISABLE_XET=1
++export NUMBA_CACHE_DIR="\$CACHE_ROOT/.cache/numba"
++export PIP_CACHE_DIR="\$CACHE_ROOT/.cache/pip"
++export XDG_CACHE_HOME="\$CACHE_ROOT/.cache"
++if [[ -n "\${SLURM_TMPDIR:-}" && -d "\${SLURM_TMPDIR}" ]]; then
++    export TMPDIR="\$SLURM_TMPDIR"
++else
++    export TMPDIR="\$CACHE_ROOT/tmp"
++fi
++mkdir -p "\$HF_HOME" "\$HF_DATASETS_CACHE" "\$HF_HUB_CACHE" "\$TORCH_HOME" \\
++         "\$NUMBA_CACHE_DIR" "\$PIP_CACHE_DIR" "\$XDG_CACHE_HOME" "\$TMPDIR" \\
++         "\$BILLM_DOWNLOADS_DIR"
++
++export HF_DATASETS_OFFLINE=1
++export TRANSFORMERS_OFFLINE=1
++export HF_HUB_OFFLINE=1
++
++export BILLM_BENCH_CSV="$CSV_ABS"
++
++# kernels/pack tools resolve the repo root from CRB_REPO (rerun-campaign fix).
++export CRB_REPO="\$(pwd)"
++
++export PYTHONPATH=\$PYTHONPATH:\$(pwd):\$(pwd)/src
++
++# Tune stages / TesseraQ on MIG slices need expandable segments (tracker
++# lesson 2026-07-22; same fix as LNQ Fisher).
++export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++
++echo '========================================'
++echo "Job:        $job_name"
++echo "Model:      $MODEL"
++echo "Technique:  $technique"
++echo "Config:     $technique_desc"
++echo "Dataset:    $DATASET"
++echo "Seed:       $SEED"
++echo "Time limit: $time_limit"
++echo "GPU:        $gpu_resource"
++echo "CPUs / Mem: $cpus / $mem"
++echo "CSV:        \$BILLM_BENCH_CSV"
++echo "Cache root: \$CACHE_ROOT (\$HF_HOME)"
++echo "TMPDIR:     \$TMPDIR"
++echo "Started:    \$(date)"
++echo "SLURM job:  \$SLURM_JOB_ID"
++echo '========================================'
++echo "Python:             \$(which python)"
++python --version
++echo "CUDA_VISIBLE_DEVICES=\$CUDA_VISIBLE_DEVICES"
++# Sanity check: aborts before GPU time is spent if the venv is broken or
++# too old for this model family.
++python -c "from transformers import LlamaForCausalLM; import transformers; print('transformers', transformers.__version__)" || {
++    echo "FATAL: LlamaForCausalLM not importable — check transformers install (SmolLM2 is a LlamaForCausalLM checkpoint)."
++    exit 1
++}
++ls -d "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR 2>/dev/null || {
++    echo "FATAL: no $MODEL snapshot under \$BILLM_DOWNLOADS_DIR — run ./sbatch/download_cache.sh first."
++    exit 1
++}
++# Phase 11: refs/main is a prerequisite for offline from_pretrained under
++# HF_HUB_OFFLINE=1 (Gotcha #22).
++for _refs in "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR/refs/main; do
++    [ -s "\$_refs" ] || {
++        echo "FATAL: \$_refs missing or empty."
++        echo "       Re-run ./sbatch/download_cache.sh — needs"
++        echo "       snapshot_download(..., local_files_only=True) second pass."
++        exit 1
++    }
++done
++nvidia-smi || true
++$python_cmd
++echo '========================================'
++echo "Finished:   \$(date)"
++echo '========================================'
++EOF
++)
++    echo "  [$sbatch_id] $job_name  ($technique_desc, t=${time_limit}, gpu=${gpu_resource#--gres=gpu:})"
++    ((job_count++))
++done
++
++echo ""
++echo "============================================"
++echo "Total jobs submitted: $job_count"
++echo "Results CSV:          $CSV_ABS"
++echo "Logs directory:       ./logs/"
++echo "============================================"
+diff --git a/src/eval_utils.py b/src/eval_utils.py
+index d2e3d2a..628610a 100644
+--- a/src/eval_utils.py
++++ b/src/eval_utils.py
+@@ -67,7 +67,7 @@ def get_ppl_eval_fn(model_name: str):
+     if "opt" in name:
+         from eval_ppl_utils import opt_eval
+         return opt_eval
+-    if "llama" in name or "danube" in name:
++    if "llama" in name or "danube" in name or "falcon" in name or "helium" in name or "olmo" in name:
+         from eval_ppl_utils import llama_eval
+         return llama_eval
+     if "qwen" in name or "smollm" in name:
+diff --git a/src/run_tesseraq.py b/src/run_tesseraq.py
+index dfa0219..ad5b89c 100644
+--- a/src/run_tesseraq.py
++++ b/src/run_tesseraq.py
+@@ -312,6 +312,33 @@ def get_awq_subsets(block, model_type):
+         ]
+         return subsets
+ 
++    if model_type == 'olmo2':
++        # METHODOLOGICAL DEVIATION from the llama recipe, documented:
++        # Olmo2 is a norm-AFTER architecture — post_attention_layernorm /
++        # post_feedforward_layernorm are applied to sublayer OUTPUTS, so no
++        # LayerNorm/RMSNorm feeds q/k/v_proj or gate/up_proj (those linears
++        # read the raw residual stream, which AWQ cannot scale without
++        # changing the model function). We therefore keep ONLY the two
++        # Linear->Linear subsets (v_proj->o_proj and up_proj->down_proj)
++        # and skip the norm-fed qkv and gate/up subsets entirely.
++        subsets = [
++            {
++                'layers': {'self_attn.o_proj': block.self_attn.o_proj},
++                'prev_op': block.self_attn.v_proj,
++                'input_layer': 'self_attn.o_proj',
++                'inspect_module': block.self_attn.o_proj,
++                'has_kwargs': False,
++            },
++            {
++                'layers': {'mlp.down_proj': block.mlp.down_proj},
++                'prev_op': block.mlp.up_proj,
++                'input_layer': 'mlp.down_proj',
++                'inspect_module': block.mlp.down_proj,
++                'has_kwargs': False,
++            },
++        ]
++        return subsets
++
+     if model_type == 'opt':
+         subsets = [
+             {
+@@ -571,6 +598,8 @@ def detect_model_type(model):
+         return 'opt'
+     elif 'llama' in class_name:
+         return 'llama'
++    elif 'olmo2' in class_name:
++        return 'olmo2'
+     elif 'qwen' in class_name:
+         return 'qwen'
+     raise ValueError(f"Unknown model class: {model.__class__.__name__}")
+@@ -586,7 +615,7 @@ def get_blocks_and_kwargs(model, dev, trainloader, nsamples, seqlen):
+         model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(dev)
+         if hasattr(model.model.decoder, 'project_in') and model.model.decoder.project_in:
+             model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
+-    elif model_type in ('llama', 'qwen'):
++    elif model_type in ('llama', 'qwen', 'olmo2'):
+         layers = model.model.layers
+         model.model.embed_tokens = model.model.embed_tokens.to(dev)
+         if hasattr(model.model, 'rotary_emb'):
+@@ -632,7 +661,7 @@ def get_blocks_and_kwargs(model, dev, trainloader, nsamples, seqlen):
+         model.model.decoder.embed_positions = model.model.decoder.embed_positions.cpu()
+         if hasattr(model.model.decoder, 'project_in') and model.model.decoder.project_in:
+             model.model.decoder.project_in = model.model.decoder.project_in.cpu()
+-    elif model_type in ('llama', 'qwen'):
++    elif model_type in ('llama', 'qwen', 'olmo2'):
+         model.model.embed_tokens = model.model.embed_tokens.cpu()
+         if hasattr(model.model, 'rotary_emb'):
+             model.model.rotary_emb = model.model.rotary_emb.cpu()
+@@ -1018,13 +1047,24 @@ def get_model(model_name):
+             use_safetensors=True, attn_implementation="eager",
+         )
+         model.seqlen = model.config.max_position_embeddings
+-    elif "llama" in model_name.lower():
++    elif "llama" in model_name.lower() or "falcon" in model_name.lower() or "helium" in model_name.lower() or "smollm" in model_name.lower():
++        # Falcon3 / Helium-1 / SmolLM2 are LlamaForCausalLM checkpoints.
+         from transformers import LlamaForCausalLM
+         model = LlamaForCausalLM.from_pretrained(
+             model_name, torch_dtype="auto", cache_dir=downloads_dir,
+             use_safetensors=True, attn_implementation="eager",
+         )
+         model.seqlen = 2048
++    elif "olmo" in model_name.lower():
++        # Olmo2ForCausalLM (e.g. allenai/OLMo-2-0425-1B).
++        # OLMo-2 checkpoints are stored fp32; load in bf16 to match every
++        # other model family processed by this runner.
++        from transformers import AutoModelForCausalLM
++        model = AutoModelForCausalLM.from_pretrained(
++            model_name, torch_dtype=torch.bfloat16, cache_dir=downloads_dir,
++            use_safetensors=True, attn_implementation="eager",
++        )
++        model.seqlen = min(model.config.max_position_embeddings, 2048)
+     elif "qwen" in model_name.lower():
+         from transformers import AutoModelForCausalLM
+         model = AutoModelForCausalLM.from_pretrained(
+diff --git a/utils/autosearch.py b/utils/autosearch.py
+index c46209c..68e0b67 100644
+--- a/utils/autosearch.py
++++ b/utils/autosearch.py
+@@ -25,7 +25,7 @@ def calculate_percentage_and_variance_original(weights, abs_weights, bin_edges):
+ '''
+ Include main method to search the rate for 2-bit salient data columns and the optimal split for 1-bit data
+ '''
+-def structural_searching(origin_matrix, up_lim=30, orders=(1,1,2)):
++def structural_searching(origin_matrix, up_lim=30, orders=(1,1,2), col_scale=None):
+     # NOTE: Partition search always uses fixed orders (1,1,2) for evaluation.
+     # Order-aware search was tested and found to hurt when all orders are equal
+     # (PPL 578 vs 369 for order=3 on Qwen3-0.6B) because the flatter error
+@@ -35,6 +35,15 @@ def structural_searching(origin_matrix, up_lim=30, orders=(1,1,2)):
+     minimal_value_0 = float('inf')
+ 
+     true_counts = origin_matrix.abs().sum(dim=0)
++    # CRB_SALIENT_METRIC=actmag (2026-07-23): rescale ONLY the per-column
++    # salient RANKING score by the AWQ activation scale s_j, i.e. rank columns
++    # by s_j * sum_i |W_ij| instead of sum_i |W_ij|. The weights themselves are
++    # NOT modified: the salient-count error search and the bulk/tail split
++    # below still evaluate the raw origin_matrix. col_scale=None (every caller
++    # except the actmag path) leaves this function bit-identical to before.
++    if col_scale is not None:
++        true_counts = true_counts * col_scale.to(
++            device=true_counts.device, dtype=true_counts.dtype)
+ 
+     error = []
+     lines = []
+diff --git a/utils/structure.py b/utils/structure.py
+index cf1d8d4..cc6cd2c 100644
+--- a/utils/structure.py
++++ b/utils/structure.py
+@@ -5,16 +5,50 @@ from utils.mask import generate_structural_mask
+ '''
+ Used to generate masks for minor structural 2-bit salient data and split major 1-bit normal data according to different metric.
+ '''
+-def structural_guassian_distribution(tmp, H=None, metric="magnitude", up_lim=30, orders=(1,1,2)):
++def structural_guassian_distribution(tmp, H=None, metric="magnitude", up_lim=30, orders=(1,1,2), col_scale=None):
+     if metric == "hessian":
+         target_weights = tmp ** 2 / (torch.diag(H).reshape((1, -1))) ** 2
+     elif metric == "magnitude":
+         target_weights = tmp
++    elif metric == "actmag":
++        # CRB_SALIENT_METRIC=actmag (2026-07-23): activation-scaled magnitude
++        # SELECTION only. Identical to "magnitude" except the per-column
++        # salient RANKING inside structural_searching becomes
++        # s_j * sum_i |W_ij|, where s = a**alpha (geo-mean-normalized AWQ
++        # scale, see kernels/pack/awq_transform.py) is passed via `col_scale`.
++        # Weights and norms are NOT modified. When col_scale is None (linears
++        # outside the AWQ v1 norm-group scope, e.g. o_proj/down_proj), this
++        # falls back to the plain magnitude score.
++        target_weights = tmp
+     else:
+         raise NotImplementedError
+ 
+-    optimal_split, mask3 = structural_searching(target_weights, up_lim, orders=orders)
++    if metric == "actmag" and col_scale is not None:
++        optimal_split, mask3 = structural_searching(
++            target_weights, up_lim, orders=orders, col_scale=col_scale)
++    else:
++        # NOTE: keep this call byte-identical to the pre-actmag code — the
++        # K2 dump path (kernels/pack/doml_dump.py:_sgd_wrapper) and other
++        # monkeypatch wrappers only accept the original signature.
++        optimal_split, mask3 = structural_searching(target_weights, up_lim, orders=orders)
+     mask1, mask2 = generate_structural_mask(target_weights, mask3, optimal_split)
+ 
+     print(mask1.sum() / mask1.numel(), mask2.sum() / mask2.numel(), mask3.sum() / mask3.numel())
+     return mask1, mask2, mask3
++
++
++def actmag_col_scale(layer, st, ed, metric):
++    """CRB_SALIENT_METRIC=actmag helper: column-slice [st:ed) of the AWQ
++    activation scale stashed on `layer` (a plain `_crb_actmag_s` attribute set
++    by kernels/pack/awq_transform.attach_selection_scales; full in_features
++    length, float32, CPU). Returns None — i.e. the caller must NOT pass a
++    col_scale kwarg, keeping the legacy call byte-identical — unless
++    metric == "actmag" AND this linear is covered by the AWQ v1 norm-group
++    scope (q/k/v/gate/up; o_proj and down_proj have no stash and fall back to
++    the plain magnitude ranking)."""
++    if metric != "actmag":
++        return None
++    s = getattr(layer, "_crb_actmag_s", None)
++    if s is None:
++        return None
++    return s[st:ed]

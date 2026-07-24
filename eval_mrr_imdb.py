@@ -47,7 +47,7 @@ def opt_eval_mrr_imdb(model, model_name, dev, save_title='UNNAMED_OPT_MRR_IMDB')
     tokenizer = get_tokenizer(model_name)
 
     # Load IMDB test set (25,000 movie reviews)
-    dataset = load_dataset("imdb", split="test", cache_dir="./downloads/datasets")
+    dataset = load_dataset("stanfordnlp/imdb", split="test", cache_dir="./downloads/datasets")
 
     # Concatenate all test reviews
     all_text = " ".join(example["text"] for example in dataset)

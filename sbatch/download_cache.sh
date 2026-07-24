@@ -174,6 +174,17 @@ models = [
     'meta-llama/Llama-3.2-1B',
     'meta-llama/Llama-3.2-3B',
     'NousResearch/Meta-Llama-3.1-8B',
+    # New-model generalization arm (2026-07-24): DOML K31 chain + TesseraQ
+    # via run_smollm2_1.7b_benchmark.sh / run_olmo2_1b_benchmark.sh /
+    # run_helium_2b_benchmark.sh. All three are
+    # UNGATED — no token needed (the .hf_token pickup above is harmless).
+    # (Falcon3 dropped 2026-07-24: verdict decided on dev box, TQ wins it.)
+    # SmolLM2 / Helium-1 are LlamaForCausalLM checkpoints; OLMo-2
+    # needs transformers>=4.47 (Olmo2ForCausalLM), Helium-1 needs >=4.49
+    # (helium model_type in AutoConfig) — both verified below.
+    'HuggingFaceTB/SmolLM2-1.7B',
+    'allenai/OLMo-2-0425-1B',
+    'kyutai/helium-1-2b',
 ]
 
 for model_name in models:
@@ -214,6 +225,26 @@ except Exception as exc:
         f'FATAL: LlamaForCausalLM not importable ({exc!r}). '
         'Check transformers install (see fix_venv_torchvision.sh for ABI fixes).'
     )
+# New-model arm (2026-07-24): OLMo-2 requires Olmo2ForCausalLM (transformers
+# >= 4.47); Helium-1 requires the helium model_type (>= 4.49) even though the
+# runner loads it through the LlamaForCausalLM branch. Abort here rather than
+# in-job if the venv's transformers predates either.
+try:
+    from transformers.models.olmo2 import Olmo2ForCausalLM  # noqa: F401
+    print(f'Olmo2ForCausalLM import OK.')
+except Exception as exc:
+    raise SystemExit(
+        f'FATAL: Olmo2ForCausalLM not importable ({exc!r}). '
+        'transformers >= 4.47 is required for allenai/OLMo-2-0425-1B.'
+    )
+try:
+    from transformers.models.helium import configuration_helium  # noqa: F401
+    print(f'helium model_type import OK.')
+except Exception as exc:
+    raise SystemExit(
+        f'FATAL: helium model_type not importable ({exc!r}). '
+        'transformers >= 4.49 is required for kyutai/helium-1-2b.'
+    )
 "
 
 echo ""
@@ -240,6 +271,16 @@ from huggingface_hub import hf_hub_download
 print('Downloading wikitext (wikitext-2-raw-v1)...')
 load_dataset('wikitext', 'wikitext-2-raw-v1')
 print('  Done: wikitext-2')
+
+# 2026-07-24: the patched datautils.py (nibi_sync.patch) requests the
+# NAMESPACED id 'Salesforce/wikitext' — huggingface_hub >= 1.0 rejects bare
+# canonical dataset ids, and the dev box already carries the namespaced form.
+# The datasets cache keys bare and namespaced ids DIFFERENTLY
+# ('wikitext' vs 'Salesforce___wikitext'), so the bare-id warm above does NOT
+# satisfy an offline load of the namespaced id. Warm both; same repo bytes.
+print('Downloading Salesforce/wikitext (wikitext-2-raw-v1, namespaced id)...')
+load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1')
+print('  Done: Salesforce/wikitext')
 
 # C4 shards — use hf_hub_download NOT load_dataset. The latter's config-hash
 # changes between online pre-warm and offline runtime (resolved URLs differ),
