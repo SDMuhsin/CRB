@@ -197,14 +197,14 @@ mkdir -p downloads/doml_dumps/${MODEL_SUB}
 echo "=== [0/5] preflight: safetensors torch.uint32 round-trip (dpk container dtype) ==="
 python3 -c "import os, tempfile, torch, safetensors; from safetensors.torch import save_file, load_file; p = os.path.join(tempfile.gettempdir(), 'st_u32_probe.safetensors'); save_file({'t': torch.zeros(8, dtype=torch.int32).view(torch.uint32)}, p); load_file(p); os.remove(p); print('preflight OK: safetensors', safetensors.__version__, 'at', safetensors.__file__)" || { echo "FATAL: safetensors cannot serialize torch.uint32 — dpk containers need safetensors>=0.6.1 inside ./env (a stale ~/.local copy may be shadowing it). Fix on the login node: ./env/bin/pip install -U 'safetensors>=0.6.1'"; exit 1; }
 echo "=== [1/5] AWQ v1 (alpha=${AWQ_ALPHA}) + DOML K31 build (lam=${DOML_LAMBDA}, g256, fp8 cb, hdiag, intra-block GPTQ, refit2, bulk-K2, rd-split) ==="
-if [ ! -f "${dd}/manifest.json" ]; then
+if [ ! -f "${dd}/manifest.json" ] || ! ls "${dd}"/*.dpk.safetensors >/dev/null 2>&1; then
     CRB_AWQ_ALPHA=${AWQ_ALPHA} python3 -u kernels/pack/doml_group_refit.py --run --model $MODEL --g 256 --dump-dir "${dd}" --codebook-dtype float8_e4m3fn --cb-weight hdiag --intra-block-gptq --refit-iters 2 --bulk-k 2 --rd-split $DOML_LAMBDA || { echo "FATAL: doml awq build failed"; exit 1; }
 else
     echo "build manifest exists — skipping (idempotent resume)"
 fi
 [ -f "${dd}/awq_scales.safetensors" ] || { echo "FATAL: ${dd}/awq_scales.safetensors missing — this dump is NOT an AWQ build (CRB_AWQ_ALPHA lost, or a stale plain dump squatting on the awqfix tag). Refusing to continue: tuning it would produce a mislabeled row."; exit 1; }
 echo "=== [2/5] stage-1 block tune (batch $DOML_BATCH / stream-chunk $DOML_SCHUNK) ==="
-if [ ! -f "${dd}-btuned/manifest.json" ]; then
+if [ ! -f "${dd}-btuned/manifest.json" ] || ! ls "${dd}-btuned"/*.dpk.safetensors >/dev/null 2>&1; then
     python3 -u kernels/pack/k31_block_tune.py --src "${dd}" --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || { echo "FATAL: k31_block_tune failed"; exit 1; }
 else
     echo "btuned manifest exists — skipping (idempotent resume)"
