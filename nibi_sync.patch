@@ -1360,10 +1360,10 @@ index 6457682..056a29d 100644
  
 diff --git a/llmdocs/NIBI_SUBMISSION.md b/llmdocs/NIBI_SUBMISSION.md
 new file mode 100644
-index 0000000..a1d0c12
+index 0000000..c3ccf88
 --- /dev/null
 +++ b/llmdocs/NIBI_SUBMISSION.md
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,208 @@
 +# Nibi submission package — SDOML sweep + new-model benchmarks (2026-07-24)
 +
 +Prepared on the dev box (platogpu007, no `sbatch` here — nothing was or could
@@ -1380,22 +1380,50 @@ index 0000000..a1d0c12
 +   s ∈ {20,50} on both models via the house `run.py sdoml_partition
 +   --sdoml_asymmetric --full_eval` path. **16 jobs.**
 +2. **New-model benchmarks** (`sbatch/run_smollm2_1.7b_benchmark.sh`,
-+   `run_olmo2_1b_benchmark.sh`, `run_helium_2b_benchmark.sh`, all new;
-+   Falcon3 dropped 2026-07-24 — verdict already decided on the dev box, TQ wins it) — per model: (a) the DOML K31 honest
++   `run_olmo2_1b_benchmark.sh`, `run_granite_3.3_2b_benchmark.sh`, all new;
++   Falcon3 dropped 2026-07-24 — verdict decided on the dev box, TQ wins it; kyutai/helium-1-2b dropped 2026-07-24 — released checkpoint unusable, FP16 baseline wt2 418 on the dev box, replaced by ibm-granite/granite-3.3-2b-base which uses the repo's native granite plumbing) — per model: (a) the DOML K31 honest
 +   chain (build λ/g256/fp8-cb/hdiag/intra-block-GPTQ/refit2/bulk-K2/rd-split →
 +   k31_block_tune → k31_assign_tune pair → k29_honest_bpw → restore +
 +   full eval) and (b) TesseraQ paper-exact (bit 2, gs 128, iters 250, bsz 4,
 +   nsamples 512, seed 0, `--full_eval`). **6 jobs.**
++3. **AWQ arm** (`sbatch/run_smollm2_1.7b_awq_benchmark.sh`,
++   `run_granite_3.3_2b_awq_benchmark.sh`, new 2026-07-24 evening) — the SAME
++   honest DOML K31 chain with the AWQ v1 activation-scaling transform
++   (`CRB_AWQ_ALPHA=0.5`, committed machinery) applied at build; motivated by
++   the Falcon3 root-cause finding (activation-outlier ratio predicts AWQ
++   applicability from calib data alone). Fully collision-proof vs the non-AWQ
++   arm: dump dirs `awqfix05-*` (vs `k31-*`), CSVs
++   `results/<model>_awq_ptq_benchmark.csv` (separate files), job names
++   `<model>_doml_awq` (separate logs), separate SLURM allocations; no
++   tesseraq duplicate. **OLMo2 deliberately has NO AWQ arm** — Olmo2 is
++   norm-AFTER (its decoder layer has no `input_layernorm` feeding q/k/v), so
++   the v1 fold is mathematically inapplicable; running it would either crash
++   or silently change the model function. **2 jobs.**
 +
-+**Total: 22 sbatch jobs.**
++**Total: 24 sbatch jobs.**
 +
 +---
 +
 +## 0. What must be on Nibi first — the sync patch is NOT optional
 +
-+The dev-box working tree carries **uncommitted** changes that every job here
-+depends on: the new-model family mappings in `run.py` / `src/eval_utils.py` /
-+`src/run_tesseraq.py` (without them every smollm2/olmo2/helium job dies
++**Sync routes (pick ONE, 2026-07-24 evening rev):** commit `7634dea`
++("Mo models") now carries most campaign changes. If your Nibi checkout can
++`git pull` to `7634dea`: apply only **`nibi_delta.patch`** (6 diffs:
++helium→granite swap, `download_cache.sh`, this doc, the
++`src/run_tesseraq.py` granite fix, and the 2 new AWQ sbatch scripts). If your
++checkout is at `6675f49` ("New DOML") with no way to pull: apply the full
++**`nibi_sync.patch`**. Do not apply both.
++
++**`src/run_tesseraq.py` granite fix is NOT optional for the granite tesseraq
++job:** without it `get_model` rejects `ibm-granite/granite-3.3-2b-base`
++(`ValueError: Unsupported model`) — observed live on the dev box, died in 5 s.
++The fix adds a granite loader branch and maps `GraniteForCausalLM` onto the
++llama block layout (same module names; granite's scalar multipliers live
++inside `forward`). Both patches now carry it.
++
++Historical context — the dev-box tree previously carried **uncommitted**
++changes that every job here depends on: the new-model family mappings in `run.py` / `src/eval_utils.py` /
++`src/run_tesseraq.py` (without them every smollm2/olmo2 job dies
 +with `ValueError: Unsupported model` — the SmolLM2 TesseraQ crash was observed
 +live on the dev box pre-fix), the `Salesforce/wikitext` dataset namespacing in
 +`datautils.py`, the `CRB_REPO` repo-root fix in all `kernels/pack/*` tools
@@ -1426,7 +1454,7 @@ index 0000000..a1d0c12
 +
 +# 2. Copy the patch from the dev box and apply it.
 +#    (scp platogpu007:/workspace/CRB/nibi_sync.patch .)
-+git apply --stat  nibi_sync.patch   # review: 26 modified + 7 new files
++git apply --stat  nibi_sync.patch   # review: 34 diffs (26 modified + 8 new files)
 +git apply --check nibi_sync.patch   # must print nothing
 +git apply nibi_sync.patch
 +ls -la sbatch/run_sdoml_sweep.sh    # new scripts arrive executable (100755)
@@ -1434,7 +1462,7 @@ index 0000000..a1d0c12
 +# 3. Refresh the offline caches (login node has internet; compute nodes do
 +#    not). Fetches the four new models, warms the NAMESPACED
 +#    Salesforce/wikitext dataset id the patched datautils now requests, and
-+#    verifies Olmo2/Helium transformers support before any GPU time is spent.
++#    verifies Olmo2/Granite transformers support before any GPU time is spent.
 +#    .hf_token handling is unchanged (read from ./.hf_token if present; the
 +#    four new models are ungated and need no token).
 +./sbatch/download_cache.sh
@@ -1443,10 +1471,12 @@ index 0000000..a1d0c12
 +./sbatch/run_sdoml_sweep.sh          --account def-xxx   # 16 jobs
 +./sbatch/run_smollm2_1.7b_benchmark.sh --account def-xxx #  2 jobs
 +./sbatch/run_olmo2_1b_benchmark.sh   --account def-xxx   #  2 jobs
-+./sbatch/run_helium_2b_benchmark.sh  --account def-xxx   #  2 jobs
++./sbatch/run_granite_3.3_2b_benchmark.sh --account def-xxx #  2 jobs
++./sbatch/run_smollm2_1.7b_awq_benchmark.sh --account def-xxx #  1 job (AWQ arm)
++./sbatch/run_granite_3.3_2b_awq_benchmark.sh --account def-xxx #  1 job (AWQ arm)
 +```
 +
-+## 2. Per-job resources (22 jobs)
++## 2. Per-job resources (24 jobs)
 +
 +| # | Job name | GRES | CPUs | Mem | Time | Payload |
 +|---|---|---|---|---|---|---|
@@ -1456,8 +1486,10 @@ index 0000000..a1d0c12
 +| 2 | `llama3_1b_sdoml_part_asym-s{20,50}` | `2g.20gb` | 4 | 32G | 26:00:00 | run.py asym + full eval (house profile verbatim) |
 +| 1 | `smollm2_1.7b_doml` | `3g.40gb` | 8 | 64G | 10:00:00 | DOML K31 chain, λ=32e-5, batch4 |
 +| 1 | `olmo2_1b_doml` | `3g.40gb` | 8 | 64G | 10:00:00 | DOML K31 chain, λ=19e-5, batch2 |
-+| 1 | `helium1_2b_doml` | `3g.40gb` | 8 | 64G | 14:00:00 | DOML K31 chain, λ=16e-5, batch2 (2B class, dev-box wall 4.3 h) |
-+| 3 | `{smollm2_1.7b,olmo2_1b,helium1_2b}_tesseraq` | `h100` (full) | 10 | 160G | 28:00:00 | TesseraQ paper-exact + full eval |
++| 1 | `granite33_2b_doml` | `3g.40gb` | 8 | 64G | 14:00:00 | DOML K31 chain, λ=16e-5 (provisional, local arm running), batch2, 40-layer 2.5B |
++| 3 | `{smollm2_1.7b,olmo2_1b,granite33_2b}_tesseraq` | `h100` (full) | 10 | 160G | 28:00:00 | TesseraQ paper-exact + full eval |
++| 1 | `smollm2_1.7b_doml_awq` | `3g.40gb` | 8 | 64G | 10:00:00 | AWQ v1 (α=0.5) + DOML K31 chain, λ=32e-5, batch4; dump `awqfix05-smollm2-…`, CSV `smollm2_1.7b_awq_ptq_benchmark.csv` |
++| 1 | `granite33_2b_doml_awq` | `3g.40gb` | 8 | 64G | 14:00:00 | AWQ v1 (α=0.5) + DOML K31 chain, λ=16e-5, batch2; dump `awqfix05-granite-…`, CSV `granite33_2b_awq_ptq_benchmark.csv` |
 +
 +GRES strings are the full long-form MIG names (`nvidia_h100_80gb_hbm3_2g.20gb`
 +etc.) copied verbatim from the proven house scripts; `4g.40gb` is NOT
@@ -1473,8 +1505,8 @@ index 0000000..a1d0c12
 +  at or above it. The 2g.20gb house precedent covered only single-stage
 +  `run.py sdoml`/`doml` jobs, not the tune chain.
 +- **λ (new models, PROVISIONAL, parameterized at the top of each script):**
-+  smollm2 32e-5, olmo2 19e-5, helium 16e-5 — current best-known
-+  rate-matched picks from the dev-box arms (honest bpw — / 2.1855 / 2.1160). Re-pick only if a Nibi honest-bpw log lands far off ≤2.25-class.
++  smollm2 32e-5, olmo2 19e-5, granite 16e-5 — current best-known
++  rate-matched picks from the dev-box arms (smollm2/granite still settling locally). Re-pick only if a Nibi honest-bpw log lands far off ≤2.25-class.
 +- **SDOML has no λ and no g256 stage:** `--rd-split` is a DOML-build knob the
 +  SDOML chain does not have, and the g256 codebook refit was measured a dead
 +  end for SDOML (`SDOML_honest_frontier.md` §9). The paper SDOML recipe is
@@ -1492,6 +1524,13 @@ index 0000000..a1d0c12
 +    cells never mix with old rows.
 +  - New models: `results/<model_short>_ptq_benchmark.csv` (house convention;
 +    these models never ran on Nibi, so the names are collision-free).
++  - AWQ arm: `results/<model_short>_awq_ptq_benchmark.csv` — deliberately a
++    SEPARATE file per model so AWQ rows can never mix with the plain-DOML rows
++    (both arms write method-tag `doml`; the file is the discriminator).
++    Containers land in `…/doml_dumps/<model>/awqfix05-…[-btuned|-atuned]`,
++    disjoint from the `k31-…` plain dumps. The `awqfix05-*` dump dirs carry an
++    `awq_scales.safetensors` the restore/tune stages REQUIRE — never delete it
++    or mix containers across arms.
 +- **Honest bpw**: printed in the job `.out` log —
 +  `grep -h "HONEST bpw" logs/*sdoml-s*_*.out logs/*_doml_*.out`
 +  (SDOML jobs print it twice: base bf16 reference, then FINAL fp8 container —
@@ -1514,12 +1553,13 @@ index 0000000..a1d0c12
 +   from the proven April scripts — there is no `sbatch`/`sinfo` on this box to
 +   re-confirm the cluster still advertises them.
 +2. **Nibi venv transformers version**: April jobs proved ≥4.51 (Qwen3 guard).
-+   OLMo-2 needs ≥4.47, Helium ≥4.49 — expected satisfied, but not verifiable
++   OLMo-2 needs ≥4.47, Granite is long-supported — expected satisfied, but not verifiable
 +   from here. Both `download_cache.sh` and the per-job guards abort cleanly
 +   (before GPU time) if not.
-+3. **Helium via the LlamaForCausalLM branch** is the dev-box-proven load path
-+   (full chain rc=0), but the Nibi transformers build must resolve the
-+   `helium` model_type the same way; the guard probes it.
++3. **Granite-3.3-2b substitution (2026-07-24):** replaces kyutai/helium-1-2b, whose
++   released checkpoint is unusable in-stack (FP16 baseline wt2 418 measured on the
++   dev box — model broken as shipped, not harness/DOML). Granite uses the repo's
++   long-standing native granite plumbing; λ=16e-5 provisional (local arm running).
 +4. **SDOML+partition asymmetric honest bpw**: there is NO container/honest-bpw
 +   tooling for the asymmetric arm (the frontier doc dead-ended it as an
 +   iterable vehicle). These 4 jobs produce PPL + downstream via the exact May
@@ -1710,35 +1750,37 @@ index 338b2ba..6cff9e6 100644
              print("FP16 mode: skipping quantization")
          elif args.low_quant_method == "sbh":
 diff --git a/sbatch/download_cache.sh b/sbatch/download_cache.sh
-index a616a5d..02542f1 100755
+index a616a5d..8796e4f 100755
 --- a/sbatch/download_cache.sh
 +++ b/sbatch/download_cache.sh
-@@ -174,6 +174,17 @@ models = [
+@@ -174,6 +174,19 @@ models = [
      'meta-llama/Llama-3.2-1B',
      'meta-llama/Llama-3.2-3B',
      'NousResearch/Meta-Llama-3.1-8B',
 +    # New-model generalization arm (2026-07-24): DOML K31 chain + TesseraQ
 +    # via run_smollm2_1.7b_benchmark.sh / run_olmo2_1b_benchmark.sh /
-+    # run_helium_2b_benchmark.sh. All three are
++    # run_granite_3.3_2b_benchmark.sh. All three are
 +    # UNGATED — no token needed (the .hf_token pickup above is harmless).
-+    # (Falcon3 dropped 2026-07-24: verdict decided on dev box, TQ wins it.)
-+    # SmolLM2 / Helium-1 are LlamaForCausalLM checkpoints; OLMo-2
-+    # needs transformers>=4.47 (Olmo2ForCausalLM), Helium-1 needs >=4.49
-+    # (helium model_type in AutoConfig) — both verified below.
++    # (Falcon3 dropped 2026-07-24: verdict decided on dev box, TQ wins it.
++    #  kyutai/helium-1-2b dropped 2026-07-24: released checkpoint unusable —
++    #  FP16 baseline wt2 418 on dev box; replaced by granite-3.3-2b-base.)
++    # SmolLM2 is a LlamaForCausalLM checkpoint; OLMo-2 needs
++    # transformers>=4.47 (Olmo2ForCausalLM); Granite-3.3 uses the repo's
++    # long-standing native granite plumbing.
 +    'HuggingFaceTB/SmolLM2-1.7B',
 +    'allenai/OLMo-2-0425-1B',
-+    'kyutai/helium-1-2b',
++    'ibm-granite/granite-3.3-2b-base',
  ]
  
  for model_name in models:
-@@ -214,6 +225,26 @@ except Exception as exc:
+@@ -214,6 +227,26 @@ except Exception as exc:
          f'FATAL: LlamaForCausalLM not importable ({exc!r}). '
          'Check transformers install (see fix_venv_torchvision.sh for ABI fixes).'
      )
 +# New-model arm (2026-07-24): OLMo-2 requires Olmo2ForCausalLM (transformers
-+# >= 4.47); Helium-1 requires the helium model_type (>= 4.49) even though the
-+# runner loads it through the LlamaForCausalLM branch. Abort here rather than
-+# in-job if the venv's transformers predates either.
++# >= 4.47); Granite-3.3 requires GraniteForCausalLM (long-supported). Abort
++# here rather than in-job if the venv's transformers predates either.
++# (helium guard removed 2026-07-24 — model dropped, checkpoint unusable.)
 +try:
 +    from transformers.models.olmo2 import Olmo2ForCausalLM  # noqa: F401
 +    print(f'Olmo2ForCausalLM import OK.')
@@ -1748,17 +1790,17 @@ index a616a5d..02542f1 100755
 +        'transformers >= 4.47 is required for allenai/OLMo-2-0425-1B.'
 +    )
 +try:
-+    from transformers.models.helium import configuration_helium  # noqa: F401
-+    print(f'helium model_type import OK.')
++    from transformers import GraniteForCausalLM  # noqa: F401
++    print(f'GraniteForCausalLM import OK.')
 +except Exception as exc:
 +    raise SystemExit(
-+        f'FATAL: helium model_type not importable ({exc!r}). '
-+        'transformers >= 4.49 is required for kyutai/helium-1-2b.'
++        f'FATAL: GraniteForCausalLM not importable ({exc!r}). '
++        'Needed for ibm-granite/granite-3.3-2b-base.'
 +    )
  "
  
  echo ""
-@@ -241,6 +272,16 @@ print('Downloading wikitext (wikitext-2-raw-v1)...')
+@@ -241,6 +274,16 @@ print('Downloading wikitext (wikitext-2-raw-v1)...')
  load_dataset('wikitext', 'wikitext-2-raw-v1')
  print('  Done: wikitext-2')
  
@@ -1775,16 +1817,45 @@ index a616a5d..02542f1 100755
  # C4 shards — use hf_hub_download NOT load_dataset. The latter's config-hash
  # changes between online pre-warm and offline runtime (resolved URLs differ),
  # which made calibration jobs fail with 'Couldn't find cache for allenai/c4
-diff --git a/sbatch/run_helium_2b_benchmark.sh b/sbatch/run_helium_2b_benchmark.sh
+diff --git a/sbatch/run_granite_3.3_2b_awq_benchmark.sh b/sbatch/run_granite_3.3_2b_awq_benchmark.sh
 new file mode 100755
-index 0000000..c0f5b42
+index 0000000..1c004b2
 --- /dev/null
-+++ b/sbatch/run_helium_2b_benchmark.sh
-@@ -0,0 +1,423 @@
++++ b/sbatch/run_granite_3.3_2b_awq_benchmark.sh
+@@ -0,0 +1,433 @@
 +#!/bin/bash
 +# ============================================================================
-+# kyutai/helium-1-2b — 2-bit PTQ benchmark: DOML K31 chain + TesseraQ (Nibi)
++# ibm-granite/granite-3.3-2b-base — 2-bit PTQ benchmark: AWQ ARM: AWQ v1 scaling + DOML K31 chain (Nibi)
 +# ============================================================================
++#
++# ######################### AWQ ARM (2026-07-24 evening) #########################
++# Same honest DOML K31 chain as the sister non-AWQ script, with ONE change: the
++# build step applies the AWQ v1 activation-scaling transform BEFORE quantization
++# (CRB_AWQ_ALPHA=0.5; kernels/pack/awq_transform.py: norm-fed q/k/v + gate/up
++# columns scaled by s_j = a_j^0.5, geometric mean 1, inverse fold into the
++# feeding RMSNorm weight -> exactly output-preserving on the FP model,
++# bpw-neutral). Scales are saved to <dump>/awq_scales.safetensors and re-applied
++# automatically by btune/atune/restore (they key on that file) — tune/eval
++# stages need NO flag. Motivated by the Falcon3 root-cause finding (2026-07-24):
++# the calib-measurable activation-outlier ratio predicts AWQ applicability, and
++# this model never got scaling.
++#
++# COLLISION SAFETY vs the non-AWQ arm (both may run concurrently on Nibi):
++#   - dump dir   awqfix05-…             (non-AWQ uses k31-…)   -> disjoint files
++#   - CSV        results/<model>_awq_ptq_benchmark.csv          -> disjoint CSV
++#   - job name   <model>_doml_awq                               -> disjoint logs
++#   - separate SLURM allocation (same 3g.40gb class); the HF snapshot cache is
++#     shared READ-ONLY by design (same as every existing job pair).
++#   - NO tesseraq job here — TQ already runs in the non-AWQ sister script;
++#     duplicating it would double-book the h100 and its CSV rows.
++# OLMo2 deliberately has NO AWQ arm: Olmo2 is a norm-AFTER architecture (its
++# decoder layer has NO input_layernorm feeding q/k/v — verified against the
++# installed transformers; same reason src/run_tesseraq.py restricts its AWQ
++# subsets there), so the v1 fold is mathematically inapplicable.
++# Requires: checkout >= 7634dea ("Mo models", carries the committed AWQ
++# machinery) + nibi_delta.patch (ships this script), or the 6675f49 +
++# nibi_sync.patch route.
++# ##############################################################################
 +#
 +# Sister script to run_llama3_1b_benchmark.sh / run_qwen_1.7b_benchmark.sh,
 +# extended to the new-model generalization arm (2026-07-24). Dispatches one
@@ -1803,10 +1874,7 @@ index 0000000..c0f5b42
 +#              → doml_group_refit --restore-dpk ... --eval-extra-ppl
 +#                    --full-eval         (wt2/c4/ptb + MMLU/HellaSwag/ARC)
 +#
-+#   tesseraq — TesseraQ paper-exact (ICLR 2025 recipe, identical arguments
-+#              to every other model's tesseraq cell in this suite).
-+#
-+# Model facts: Helium-1 2B, helium model_type loaded via the LlamaForCausalLM branch (dev-box proven). Dev-box K31 chain wall (24 GB slice, batch2): build 5295s + btune 1130s + atune 3705s + eval 5382s ≈ 4.3 h — the 2B class needs the b3 walltime.
++# Model facts: Granite-3.3 2B base (GraniteForCausalLM, 40 layers, h=2048, ~2.5B params). Repo has NATIVE granite plumbing (run.py/eval_utils 'granite' branches predate this campaign). Substituted 2026-07-24 for kyutai/helium-1-2b, whose released checkpoint is unusable (FP16 baseline wt2 418 on dev box — model broken as shipped, not a harness/DOML issue). 40 layers => longer chain than helium; walltime sized accordingly.
 +#
 +# Dev-box measurements (2026-07-24, Blackwell MIG slices — used for sizing,
 +# never undercut):
@@ -1818,16 +1886,16 @@ index 0000000..c0f5b42
 +#     precedent for this size class (4g.40gb is NOT provisioned on Nibi,
 +#     Gotcha #33 — the house 1.7B tesseraq profile is GPU_FULL + 160G).
 +#
-+# PREREQ: nibi_sync.patch applied (the helium family mappings in run.py /
++# PREREQ: nibi_sync.patch applied (the campaign fixes in run.py /
 +# src/eval_utils.py / src/run_tesseraq.py and the kernels/pack fixes are
 +# uncommitted on the dev box — without them every job here crashes with
 +# "Unsupported model"), and ./sbatch/download_cache.sh re-run (fetches
-+# kyutai/helium-1-2b + the namespaced wikitext repo).
++# ibm-granite/granite-3.3-2b-base + the namespaced wikitext repo).
 +#
 +# Usage:
-+#   ./sbatch/run_helium_2b_benchmark.sh                      # submit both jobs
-+#   ./sbatch/run_helium_2b_benchmark.sh --account def-foo
-+#   ./sbatch/run_helium_2b_benchmark.sh --local              # run serially, no SLURM
++#   ./sbatch/run_granite_3.3_2b_awq_benchmark.sh                      # submit the job
++#   ./sbatch/run_granite_3.3_2b_awq_benchmark.sh --account def-foo
++#   ./sbatch/run_granite_3.3_2b_awq_benchmark.sh --local              # run serially, no SLURM
 +#
 +# ============================================================================
 +
@@ -1860,14 +1928,427 @@ index 0000000..c0f5b42
 +# CONFIGURATION
 +# ============================================================================
 +
-+MODEL="kyutai/helium-1-2b"
-+MODEL_SHORT="helium1_2b"
-+MODEL_SUB="helium1-2b"                # downloads/doml_dumps/<sub>/ dump subdir
++MODEL="ibm-granite/granite-3.3-2b-base"
++MODEL_SHORT="granite33_2b"
++MODEL_SUB="granite33-2b"                # downloads/doml_dumps/<sub>/ dump subdir
 +DATASET="wikitext2"
 +SEED=0
 +
 +# HF cache directory uses the canonical models--<org>--<repo> layout.
-+MODEL_CACHE_DIR="models--kyutai--helium-1-2b"
++MODEL_CACHE_DIR="models--ibm-granite--granite-3.3-2b-base"
++
++CSV_NAME="${MODEL_SHORT}_awq_ptq_benchmark.csv"   # AWQ arm: NEVER the non-AWQ CSV
++CSV_ABS="$(pwd)/results/$CSV_NAME"
++
++# ----------------------------------------------------------------------------
++# DOML λ (rd-split rate weight) — PROVISIONAL best-known rate-matched pick.
++# 16e-5 is the dev-box rate-matched pick (honest bpw 2.1160; matches the paper Qwen3-1.7B/Llama-3.2-1B λ; 2026-07-24).
++# Re-pick only if the honest-bpw log lands far off the ≤2.25-class target
++# (tracker λ-audit rule). The dump dir name tracks this value.
++# ----------------------------------------------------------------------------
++DOML_LAMBDA="16e-5"
++# Tune-stage memory knobs, measured on the dev box for THIS model (24 GB
++# slice envelope). Do not raise on MIG slices without re-measuring.
++DOML_BATCH=2
++DOML_SCHUNK=2
++# AWQ v1 exponent (uniform recipe; matches every dev-box awqfix05-* run).
++AWQ_ALPHA="0.5"
++DOML_DUMP_DIR="downloads/doml_dumps/${MODEL_SUB}/awqfix05-granite-lam${DOML_LAMBDA}-g256"
++
++# Nibi GRES strings. Full long-form MIG names are REQUIRED — short forms
++# like `1g.10gb` are rejected (Gotcha #11). 4g.40gb is NOT provisioned
++# (Gotcha #33; sinfo confirms).
++GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
++GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
++GPU_LARGE="--gres=gpu:nvidia_h100_80gb_hbm3_3g.40gb:1"
++GPU_FULL="--gres=gpu:h100:1"
++
++# Methods to benchmark — one sbatch job per entry.
++techniques=(
++    "doml_awq"
++)
++
++# ============================================================================
++# HELPER FUNCTIONS
++# ============================================================================
++
++get_job_resources() {
++    # Sets: gpu_resource, cpus, mem
++    case $1 in
++        doml_awq)
++            # Full K31 chain. Dev-box proven envelope is a 24 GB slice at
++            # batch $DOML_BATCH; 2g.20gb (20 GB) undercuts it ⇒ 3g.40gb.
++            # Host RAM: 64G = 2× the house 32G DOML budget (container +
++            # calib + restore copies).
++            gpu_resource="$GPU_LARGE"
++            cpus=8
++            mem="64G"
++            ;;
++        *)
++            gpu_resource="$GPU_MEDIUM"
++            cpus=4
++            mem="32G"
++            ;;
++    esac
++}
++
++get_time_limit() {
++    # Alliance Nibi tiers: b1≤3h, b2≤12h, b3≤24h, b4≤72h, b5≤168h.
++    # tesseraq: house precedent ×1 (28 h, b4) — do NOT shrink.
++    # doml: dev-box chain wall + eval suite, ×2+ margin for the slower
++    #       per-SM Nibi MIG slice; never below the 05:00:00 house doml floor.
++    case $1 in
++        doml_awq)  echo "14:00:00" ;;
++        *)         echo "05:00:00" ;;
++    esac
++}
++
++build_python_cmd() {
++    # Prints the job payload. doml emits the full multi-line K31 chain
++    # (idempotent stages, per-stage FATAL guards — requeued jobs resume);
++    # tesseraq emits the house one-liner. Everything except EVAL_DIR is
++    # resolved at submit time; \$EVAL_DIR survives to run at job time.
++    local technique=$1
++    local dd="$DOML_DUMP_DIR"
++
++    # --full_eval = PPL on (wikitext2,c4,ptb) + MMLU + HellaSwag + ARC-Easy +
++    # ARC-Challenge. Each task writes its own row to BILLM_BENCH_CSV.
++    local common_evals="--full_eval"
++
++    case $technique in
++        doml_awq)
++            cat <<CHAIN
++mkdir -p downloads/doml_dumps/${MODEL_SUB}
++echo "=== [1/5] AWQ v1 (alpha=${AWQ_ALPHA}) + DOML K31 build (lam=${DOML_LAMBDA}, g256, fp8 cb, hdiag, intra-block GPTQ, refit2, bulk-K2, rd-split) ==="
++if [ ! -f "${dd}/manifest.json" ]; then
++    CRB_AWQ_ALPHA=${AWQ_ALPHA} python3 -u kernels/pack/doml_group_refit.py --run --model $MODEL --g 256 --dump-dir "${dd}" --codebook-dtype float8_e4m3fn --cb-weight hdiag --intra-block-gptq --refit-iters 2 --bulk-k 2 --rd-split $DOML_LAMBDA || { echo "FATAL: doml awq build failed"; exit 1; }
++else
++    echo "build manifest exists — skipping (idempotent resume)"
++fi
++[ -f "${dd}/awq_scales.safetensors" ] || { echo "FATAL: ${dd}/awq_scales.safetensors missing — this dump is NOT an AWQ build (CRB_AWQ_ALPHA lost, or a stale plain dump squatting on the awqfix tag). Refusing to continue: tuning it would produce a mislabeled row."; exit 1; }
++echo "=== [2/5] stage-1 block tune (batch $DOML_BATCH / stream-chunk $DOML_SCHUNK) ==="
++if [ ! -f "${dd}-btuned/manifest.json" ]; then
++    python3 -u kernels/pack/k31_block_tune.py --src "${dd}" --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || { echo "FATAL: k31_block_tune failed"; exit 1; }
++else
++    echo "btuned manifest exists — skipping (idempotent resume)"
++fi
++echo "=== [3/5] stage-2 assignment tune (pair mode) ==="
++EVAL_DIR="${dd}-btuned"
++if [ ! -f "${dd}-atuned/manifest.json" ]; then
++    python3 -u kernels/pack/k31_assign_tune.py --src "${dd}-btuned" --mode pair --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || echo "WARN: k31_assign_tune failed — shipping the btuned container (tracker precedent: btuned is a complete honest DOML row)"
++else
++    echo "atuned manifest exists — skipping (idempotent resume)"
++fi
++if [ -f "${dd}-atuned/manifest.json" ] && ls "${dd}-atuned"/*.dpk.safetensors >/dev/null 2>&1; then
++    EVAL_DIR="${dd}-atuned"
++fi
++echo "=== [4/5] honest bpw (k29, on \$EVAL_DIR) ==="
++python3 -u kernels/pack/k29_honest_bpw.py --dir "\$EVAL_DIR" || { echo "FATAL: k29_honest_bpw failed"; exit 1; }
++echo "=== [5/5] restore + full eval (\$EVAL_DIR) ==="
++python3 -u kernels/pack/doml_group_refit.py --run --restore-dpk "\$EVAL_DIR" --eval-extra-ppl --full-eval || { echo "FATAL: restore eval failed"; exit 1; }
++CHAIN
++            ;;
++        *)
++            echo "echo 'Unknown technique: $technique'; exit 1"
++            ;;
++    esac
++}
++
++get_technique_desc() {
++    case $1 in
++        doml_awq)  echo "AWQ v1 (alpha=$AWQ_ALPHA, norm-fed qkv+gate/up, bpw-neutral) + DOML K31 chain (lam=$DOML_LAMBDA g256 fp8-cb hdiag intra-gptq refit2 bulkK2 rd-split -> btune -> atune pair -> honest bpw -> full eval)" ;;
++    esac
++}
++
++# ============================================================================
++# MAIN LOOP
++# ============================================================================
++
++job_count=0
++mkdir -p ./logs ./results
++
++echo "============================================"
++echo "$MODEL PTQ Benchmark Suite (Nibi)"
++echo "============================================"
++echo "Model:       $MODEL"
++echo "Dataset:     $DATASET"
++echo "Seed:        $SEED"
++echo "DOML lam:    $DOML_LAMBDA (provisional rate-matched pick)"
++echo "AWQ alpha:   $AWQ_ALPHA (v1 scope: norm-fed qkv + gate/up)"
++echo "Techniques:  ${techniques[*]}"
++echo "Shared CSV:  $CSV_ABS"
++echo "Logs:        ./logs/"
++echo "============================================"
++echo ""
++
++for technique in "${techniques[@]}"; do
++    technique_desc=$(get_technique_desc "$technique")
++    time_limit=$(get_time_limit "$technique")
++    get_job_resources "$technique"
++
++    job_name="${MODEL_SHORT}_${technique}"
++    python_cmd=$(build_python_cmd "$technique")
++
++    if [[ "$LOCAL_MODE" == true ]]; then
++        echo "========================================"
++        echo "Running locally: $job_name"
++        echo "Config: $technique_desc"
++        echo "Command: $python_cmd"
++        echo "========================================"
++        if [[ -n "${SCRATCH:-}" && -d "${SCRATCH}" ]]; then
++            CACHE_ROOT_LOCAL="$SCRATCH/billm2_cache"
++            DOWNLOADS_LOCAL="$CACHE_ROOT_LOCAL/downloads"
++        else
++            CACHE_ROOT_LOCAL="$(pwd)"
++            DOWNLOADS_LOCAL="$(pwd)/downloads"
++        fi
++        if [[ "$DOWNLOADS_LOCAL" != "$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++            ln -sfn "$DOWNLOADS_LOCAL" ./downloads
++        fi
++        export BILLM_BENCH_CSV="$CSV_ABS"
++        export BILLM_DOWNLOADS_DIR="$DOWNLOADS_LOCAL"
++        export HF_HOME="$CACHE_ROOT_LOCAL/hf"
++        export HF_HUB_CACHE="$BILLM_DOWNLOADS_DIR"
++        export HF_DATASETS_CACHE="$CACHE_ROOT_LOCAL/hf/datasets"
++        export TORCH_HOME="$CACHE_ROOT_LOCAL/torch"
++        export HF_HUB_DISABLE_XET=1
++        export NUMBA_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/numba"
++        export PIP_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/pip"
++        export XDG_CACHE_HOME="$CACHE_ROOT_LOCAL/.cache"
++        export TMPDIR="${SLURM_TMPDIR:-$CACHE_ROOT_LOCAL/tmp}"
++        mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
++                 "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR" \
++                 "$BILLM_DOWNLOADS_DIR"
++        export HF_DATASETS_OFFLINE=1
++        export TRANSFORMERS_OFFLINE=1
++        export HF_HUB_OFFLINE=1
++        export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/src
++        export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++        eval "$python_cmd"
++        ((job_count++))
++        continue
++    fi
++
++    account_line=""
++    if [[ -n "$ACCOUNT" ]]; then
++        account_line="#SBATCH --account=$ACCOUNT"
++    fi
++
++    sbatch_id=$(sbatch --parsable <<EOF
++#!/bin/bash
++#SBATCH --job-name=$job_name
++#SBATCH --output=./logs/${job_name}_%j.out
++#SBATCH --error=./logs/${job_name}_%j.err
++#SBATCH --time=$time_limit
++#SBATCH $gpu_resource
++#SBATCH --cpus-per-task=$cpus
++#SBATCH --mem=$mem
++#SBATCH --ntasks-per-node=1
++#SBATCH --nodes=1
++$account_line
++
++module load gcc arrow scipy-stack cuda cudnn
++source ./env/bin/activate
++# Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
++# tqdm / accelerate / typing_extensions from \$HOME/.local/. Do NOT set
++# PYTHONNOUSERSITE=1 here.
++
++if [[ -n "\${SCRATCH:-}" && -d "\${SCRATCH}" ]]; then
++    CACHE_ROOT="\$SCRATCH/billm2_cache"
++else
++    CACHE_ROOT="\$(pwd)/downloads"
++fi
++
++if [[ "\$CACHE_ROOT" != "\$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++    ln -sfn "\$CACHE_ROOT" ./downloads
++fi
++
++export BILLM_DOWNLOADS_DIR="\$CACHE_ROOT/downloads"
++export HF_HOME="\$CACHE_ROOT/hf"
++export HF_HUB_CACHE="\$BILLM_DOWNLOADS_DIR"
++export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
++export TORCH_HOME="\$CACHE_ROOT/torch"
++export HF_HUB_DISABLE_XET=1
++export NUMBA_CACHE_DIR="\$CACHE_ROOT/.cache/numba"
++export PIP_CACHE_DIR="\$CACHE_ROOT/.cache/pip"
++export XDG_CACHE_HOME="\$CACHE_ROOT/.cache"
++if [[ -n "\${SLURM_TMPDIR:-}" && -d "\${SLURM_TMPDIR}" ]]; then
++    export TMPDIR="\$SLURM_TMPDIR"
++else
++    export TMPDIR="\$CACHE_ROOT/tmp"
++fi
++mkdir -p "\$HF_HOME" "\$HF_DATASETS_CACHE" "\$HF_HUB_CACHE" "\$TORCH_HOME" \\
++         "\$NUMBA_CACHE_DIR" "\$PIP_CACHE_DIR" "\$XDG_CACHE_HOME" "\$TMPDIR" \\
++         "\$BILLM_DOWNLOADS_DIR"
++
++export HF_DATASETS_OFFLINE=1
++export TRANSFORMERS_OFFLINE=1
++export HF_HUB_OFFLINE=1
++
++export BILLM_BENCH_CSV="$CSV_ABS"
++
++# kernels/pack tools resolve the repo root from CRB_REPO (rerun-campaign fix).
++export CRB_REPO="\$(pwd)"
++
++export PYTHONPATH=\$PYTHONPATH:\$(pwd):\$(pwd)/src
++
++# Tune stages / TesseraQ on MIG slices need expandable segments (tracker
++# lesson 2026-07-22; same fix as LNQ Fisher).
++export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++
++echo '========================================'
++echo "Job:        $job_name"
++echo "Model:      $MODEL"
++echo "Technique:  $technique"
++echo "Config:     $technique_desc"
++echo "Dataset:    $DATASET"
++echo "Seed:       $SEED"
++echo "Time limit: $time_limit"
++echo "GPU:        $gpu_resource"
++echo "CPUs / Mem: $cpus / $mem"
++echo "CSV:        \$BILLM_BENCH_CSV"
++echo "Cache root: \$CACHE_ROOT (\$HF_HOME)"
++echo "TMPDIR:     \$TMPDIR"
++echo "Started:    \$(date)"
++echo "SLURM job:  \$SLURM_JOB_ID"
++echo '========================================'
++echo "Python:             \$(which python)"
++python --version
++echo "CUDA_VISIBLE_DEVICES=\$CUDA_VISIBLE_DEVICES"
++# Sanity check: aborts before GPU time is spent if the venv is broken or
++# too old for this model family.
++python -c "from transformers import GraniteForCausalLM; import transformers; print('transformers', transformers.__version__)" || {
++    echo "FATAL: GraniteForCausalLM not importable — transformers too old for Granite-3.3."
++    exit 1
++}
++python -c "from kernels.pack.awq_transform import collect_awq_scales, apply_awq_" || {
++    echo "FATAL: kernels/pack/awq_transform.py not importable — checkout must carry the committed AWQ machinery (>= 7634dea) with the patch applied."
++    exit 1
++}
++ls -d "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR 2>/dev/null || {
++    echo "FATAL: no $MODEL snapshot under \$BILLM_DOWNLOADS_DIR — run ./sbatch/download_cache.sh first."
++    exit 1
++}
++# Phase 11: refs/main is a prerequisite for offline from_pretrained under
++# HF_HUB_OFFLINE=1 (Gotcha #22).
++for _refs in "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR/refs/main; do
++    [ -s "\$_refs" ] || {
++        echo "FATAL: \$_refs missing or empty."
++        echo "       Re-run ./sbatch/download_cache.sh — needs"
++        echo "       snapshot_download(..., local_files_only=True) second pass."
++        exit 1
++    }
++done
++nvidia-smi || true
++$python_cmd
++echo '========================================'
++echo "Finished:   \$(date)"
++echo '========================================'
++EOF
++)
++    echo "  [$sbatch_id] $job_name  ($technique_desc, t=${time_limit}, gpu=${gpu_resource#--gres=gpu:})"
++    ((job_count++))
++done
++
++echo ""
++echo "============================================"
++echo "Total jobs submitted: $job_count"
++echo "Results CSV:          $CSV_ABS"
++echo "Logs directory:       ./logs/"
++echo "============================================"
+diff --git a/sbatch/run_granite_3.3_2b_benchmark.sh b/sbatch/run_granite_3.3_2b_benchmark.sh
+new file mode 100755
+index 0000000..2a841f1
+--- /dev/null
++++ b/sbatch/run_granite_3.3_2b_benchmark.sh
+@@ -0,0 +1,423 @@
++#!/bin/bash
++# ============================================================================
++# ibm-granite/granite-3.3-2b-base — 2-bit PTQ benchmark: DOML K31 chain + TesseraQ (Nibi)
++# ============================================================================
++#
++# Sister script to run_llama3_1b_benchmark.sh / run_qwen_1.7b_benchmark.sh,
++# extended to the new-model generalization arm (2026-07-24). Dispatches one
++# sbatch job per method:
++#
++#   doml     — the full honest DOML K31 chain (the recipe of every rerun
++#              DOML paper row; scripts/research/doml_pipeline.sh precedent):
++#                doml_group_refit --run  (build: λ rd-split, g256 codebook
++#                    groups, fp8-e4m3 codebooks, hdiag cb weighting,
++#                    intra-block GPTQ, refit-iters 2, bulk-K 2)
++#              → k31_block_tune          (stage-1 output-aware level tune)
++#              → k31_assign_tune --mode pair  (stage-2 assignment tune;
++#                    on failure the btuned container ships — tracker
++#                    precedent, still a complete honest DOML row)
++#              → k29_honest_bpw          (honest bpw of the shipped container)
++#              → doml_group_refit --restore-dpk ... --eval-extra-ppl
++#                    --full-eval         (wt2/c4/ptb + MMLU/HellaSwag/ARC)
++#
++#   tesseraq — TesseraQ paper-exact (ICLR 2025 recipe, identical arguments
++#              to every other model's tesseraq cell in this suite).
++#
++# Model facts: Granite-3.3 2B base (GraniteForCausalLM, 40 layers, h=2048, ~2.5B params). Repo has NATIVE granite plumbing (run.py/eval_utils 'granite' branches predate this campaign). Substituted 2026-07-24 for kyutai/helium-1-2b, whose released checkpoint is unusable (FP16 baseline wt2 418 on dev box — model broken as shipped, not a harness/DOML issue). 40 layers => longer chain than helium; walltime sized accordingly.
++#
++# Dev-box measurements (2026-07-24, Blackwell MIG slices — used for sizing,
++# never undercut):
++#   - DOML build+tunes for the 1B/2B class fit a 24 GB slice at the batch/
++#     stream-chunk knobs pinned below. 2g.20gb (20 GB) is SMALLER than that
++#     proven envelope ⇒ DOML chain jobs use 3g.40gb.
++#   - TesseraQ paper-exact peaked >23.6 GB GPU (OOMed a 24 GB slice; needs
++#     ~27 GB) and >100 GB host RSS ⇒ full h100 + 160 G, the house tesseraq
++#     precedent for this size class (4g.40gb is NOT provisioned on Nibi,
++#     Gotcha #33 — the house 1.7B tesseraq profile is GPU_FULL + 160G).
++#
++# PREREQ: nibi_sync.patch applied (the campaign fixes in run.py /
++# src/eval_utils.py / src/run_tesseraq.py and the kernels/pack fixes are
++# uncommitted on the dev box — without them every job here crashes with
++# "Unsupported model"), and ./sbatch/download_cache.sh re-run (fetches
++# ibm-granite/granite-3.3-2b-base + the namespaced wikitext repo).
++#
++# Usage:
++#   ./sbatch/run_granite_3.3_2b_benchmark.sh                      # submit both jobs
++#   ./sbatch/run_granite_3.3_2b_benchmark.sh --account def-foo
++#   ./sbatch/run_granite_3.3_2b_benchmark.sh --local              # run serially, no SLURM
++#
++# ============================================================================
++
++# ============================================================================
++# COMMAND LINE ARGUMENTS
++# ============================================================================
++
++ACCOUNT=""
++LOCAL_MODE=false
++
++while [[ $# -gt 0 ]]; do
++    case $1 in
++        --account)
++            ACCOUNT="$2"
++            shift 2
++            ;;
++        --local)
++            LOCAL_MODE=true
++            shift
++            ;;
++        *)
++            echo "Unknown option: $1"
++            echo "Usage: $0 [--account SLURM_ACCOUNT] [--local]"
++            exit 1
++            ;;
++    esac
++done
++
++# ============================================================================
++# CONFIGURATION
++# ============================================================================
++
++MODEL="ibm-granite/granite-3.3-2b-base"
++MODEL_SHORT="granite33_2b"
++MODEL_SUB="granite33-2b"                # downloads/doml_dumps/<sub>/ dump subdir
++DATASET="wikitext2"
++SEED=0
++
++# HF cache directory uses the canonical models--<org>--<repo> layout.
++MODEL_CACHE_DIR="models--ibm-granite--granite-3.3-2b-base"
 +
 +CSV_NAME="${MODEL_SHORT}_ptq_benchmark.csv"
 +CSV_ABS="$(pwd)/results/$CSV_NAME"
@@ -1883,7 +2364,7 @@ index 0000000..c0f5b42
 +# slice envelope). Do not raise on MIG slices without re-measuring.
 +DOML_BATCH=2
 +DOML_SCHUNK=2
-+DOML_DUMP_DIR="downloads/doml_dumps/${MODEL_SUB}/k31-helium-lam${DOML_LAMBDA}-g256"
++DOML_DUMP_DIR="downloads/doml_dumps/${MODEL_SUB}/k31-granite-lam${DOML_LAMBDA}-g256"
 +
 +# Nibi GRES strings. Full long-form MIG names are REQUIRED — short forms
 +# like `1g.10gb` are rejected (Gotcha #11). 4g.40gb is NOT provisioned
@@ -2169,8 +2650,8 @@ index 0000000..c0f5b42
 +echo "CUDA_VISIBLE_DEVICES=\$CUDA_VISIBLE_DEVICES"
 +# Sanity check: aborts before GPU time is spent if the venv is broken or
 +# too old for this model family.
-+python -c "from transformers import LlamaForCausalLM; from transformers.models.helium import configuration_helium; import transformers; print('transformers', transformers.__version__)" || {
-+    echo "FATAL: LlamaForCausalLM / helium config not importable — transformers is too old (<4.49) for Helium-1."
++python -c "from transformers import GraniteForCausalLM; import transformers; print('transformers', transformers.__version__)" || {
++    echo "FATAL: GraniteForCausalLM not importable — transformers too old for Granite-3.3."
 +    exit 1
 +}
 +ls -d "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR 2>/dev/null || {
@@ -3101,6 +3582,445 @@ index 0000000..ecac51b
 +echo "Results CSVs:         ./results/sdoml_sweep_*.csv (one per job)"
 +echo "Logs directory:       ./logs/"
 +echo "============================================"
+diff --git a/sbatch/run_smollm2_1.7b_awq_benchmark.sh b/sbatch/run_smollm2_1.7b_awq_benchmark.sh
+new file mode 100755
+index 0000000..687b4c7
+--- /dev/null
++++ b/sbatch/run_smollm2_1.7b_awq_benchmark.sh
+@@ -0,0 +1,433 @@
++#!/bin/bash
++# ============================================================================
++# HuggingFaceTB/SmolLM2-1.7B — 2-bit PTQ benchmark: AWQ ARM: AWQ v1 scaling + DOML K31 chain (Nibi)
++# ============================================================================
++#
++# ######################### AWQ ARM (2026-07-24 evening) #########################
++# Same honest DOML K31 chain as the sister non-AWQ script, with ONE change: the
++# build step applies the AWQ v1 activation-scaling transform BEFORE quantization
++# (CRB_AWQ_ALPHA=0.5; kernels/pack/awq_transform.py: norm-fed q/k/v + gate/up
++# columns scaled by s_j = a_j^0.5, geometric mean 1, inverse fold into the
++# feeding RMSNorm weight -> exactly output-preserving on the FP model,
++# bpw-neutral). Scales are saved to <dump>/awq_scales.safetensors and re-applied
++# automatically by btune/atune/restore (they key on that file) — tune/eval
++# stages need NO flag. Motivated by the Falcon3 root-cause finding (2026-07-24):
++# the calib-measurable activation-outlier ratio predicts AWQ applicability, and
++# this model never got scaling.
++#
++# COLLISION SAFETY vs the non-AWQ arm (both may run concurrently on Nibi):
++#   - dump dir   awqfix05-…             (non-AWQ uses k31-…)   -> disjoint files
++#   - CSV        results/<model>_awq_ptq_benchmark.csv          -> disjoint CSV
++#   - job name   <model>_doml_awq                               -> disjoint logs
++#   - separate SLURM allocation (same 3g.40gb class); the HF snapshot cache is
++#     shared READ-ONLY by design (same as every existing job pair).
++#   - NO tesseraq job here — TQ already runs in the non-AWQ sister script;
++#     duplicating it would double-book the h100 and its CSV rows.
++# OLMo2 deliberately has NO AWQ arm: Olmo2 is a norm-AFTER architecture (its
++# decoder layer has NO input_layernorm feeding q/k/v — verified against the
++# installed transformers; same reason src/run_tesseraq.py restricts its AWQ
++# subsets there), so the v1 fold is mathematically inapplicable.
++# Requires: checkout >= 7634dea ("Mo models", carries the committed AWQ
++# machinery) + nibi_delta.patch (ships this script), or the 6675f49 +
++# nibi_sync.patch route.
++# ##############################################################################
++#
++# Sister script to run_llama3_1b_benchmark.sh / run_qwen_1.7b_benchmark.sh,
++# extended to the new-model generalization arm (2026-07-24). Dispatches one
++# sbatch job per method:
++#
++#   doml     — the full honest DOML K31 chain (the recipe of every rerun
++#              DOML paper row; scripts/research/doml_pipeline.sh precedent):
++#                doml_group_refit --run  (build: λ rd-split, g256 codebook
++#                    groups, fp8-e4m3 codebooks, hdiag cb weighting,
++#                    intra-block GPTQ, refit-iters 2, bulk-K 2)
++#              → k31_block_tune          (stage-1 output-aware level tune)
++#              → k31_assign_tune --mode pair  (stage-2 assignment tune;
++#                    on failure the btuned container ships — tracker
++#                    precedent, still a complete honest DOML row)
++#              → k29_honest_bpw          (honest bpw of the shipped container)
++#              → doml_group_refit --restore-dpk ... --eval-extra-ppl
++#                    --full-eval         (wt2/c4/ptb + MMLU/HellaSwag/ARC)
++#
++# Model facts: SmolLM2-1.7B, LlamaForCausalLM checkpoint, hidden=2048/24 layers. Dev-box K31 build (24 GB slice, batch4): 2213s; narrower MLP than Llama-3.2-1B lets batch4 fit.
++#
++# Dev-box measurements (2026-07-24, Blackwell MIG slices — used for sizing,
++# never undercut):
++#   - DOML build+tunes for the 1B/2B class fit a 24 GB slice at the batch/
++#     stream-chunk knobs pinned below. 2g.20gb (20 GB) is SMALLER than that
++#     proven envelope ⇒ DOML chain jobs use 3g.40gb.
++#   - TesseraQ paper-exact peaked >23.6 GB GPU (OOMed a 24 GB slice; needs
++#     ~27 GB) and >100 GB host RSS ⇒ full h100 + 160 G, the house tesseraq
++#     precedent for this size class (4g.40gb is NOT provisioned on Nibi,
++#     Gotcha #33 — the house 1.7B tesseraq profile is GPU_FULL + 160G).
++#
++# PREREQ: nibi_sync.patch applied (the smollm2 family mappings in run.py /
++# src/eval_utils.py / src/run_tesseraq.py and the kernels/pack fixes are
++# uncommitted on the dev box — without them every job here crashes with
++# "Unsupported model"), and ./sbatch/download_cache.sh re-run (fetches
++# HuggingFaceTB/SmolLM2-1.7B + the namespaced wikitext repo).
++#
++# Usage:
++#   ./sbatch/run_smollm2_1.7b_awq_benchmark.sh                      # submit the job
++#   ./sbatch/run_smollm2_1.7b_awq_benchmark.sh --account def-foo
++#   ./sbatch/run_smollm2_1.7b_awq_benchmark.sh --local              # run serially, no SLURM
++#
++# ============================================================================
++
++# ============================================================================
++# COMMAND LINE ARGUMENTS
++# ============================================================================
++
++ACCOUNT=""
++LOCAL_MODE=false
++
++while [[ $# -gt 0 ]]; do
++    case $1 in
++        --account)
++            ACCOUNT="$2"
++            shift 2
++            ;;
++        --local)
++            LOCAL_MODE=true
++            shift
++            ;;
++        *)
++            echo "Unknown option: $1"
++            echo "Usage: $0 [--account SLURM_ACCOUNT] [--local]"
++            exit 1
++            ;;
++    esac
++done
++
++# ============================================================================
++# CONFIGURATION
++# ============================================================================
++
++MODEL="HuggingFaceTB/SmolLM2-1.7B"
++MODEL_SHORT="smollm2_1.7b"
++MODEL_SUB="smollm2-1.7b"                # downloads/doml_dumps/<sub>/ dump subdir
++DATASET="wikitext2"
++SEED=0
++
++# HF cache directory uses the canonical models--<org>--<repo> layout.
++MODEL_CACHE_DIR="models--HuggingFaceTB--SmolLM2-1.7B"
++
++CSV_NAME="${MODEL_SHORT}_awq_ptq_benchmark.csv"   # AWQ arm: NEVER the non-AWQ CSV
++CSV_ABS="$(pwd)/results/$CSV_NAME"
++
++# ----------------------------------------------------------------------------
++# DOML λ (rd-split rate weight) — PROVISIONAL best-known rate-matched pick.
++# 32e-5 is the dev-box rate-matched pick (mirrors the falcon3 landing; 16e-5 arm also run for comparison; 2026-07-24).
++# Re-pick only if the honest-bpw log lands far off the ≤2.25-class target
++# (tracker λ-audit rule). The dump dir name tracks this value.
++# ----------------------------------------------------------------------------
++DOML_LAMBDA="32e-5"
++# Tune-stage memory knobs, measured on the dev box for THIS model (24 GB
++# slice envelope). Do not raise on MIG slices without re-measuring.
++DOML_BATCH=4
++DOML_SCHUNK=4
++# AWQ v1 exponent (uniform recipe; matches every dev-box awqfix05-* run).
++AWQ_ALPHA="0.5"
++DOML_DUMP_DIR="downloads/doml_dumps/${MODEL_SUB}/awqfix05-smollm2-lam${DOML_LAMBDA}-g256"
++
++# Nibi GRES strings. Full long-form MIG names are REQUIRED — short forms
++# like `1g.10gb` are rejected (Gotcha #11). 4g.40gb is NOT provisioned
++# (Gotcha #33; sinfo confirms).
++GPU_SMALL="--gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1"
++GPU_MEDIUM="--gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1"
++GPU_LARGE="--gres=gpu:nvidia_h100_80gb_hbm3_3g.40gb:1"
++GPU_FULL="--gres=gpu:h100:1"
++
++# Methods to benchmark — one sbatch job per entry.
++techniques=(
++    "doml_awq"
++)
++
++# ============================================================================
++# HELPER FUNCTIONS
++# ============================================================================
++
++get_job_resources() {
++    # Sets: gpu_resource, cpus, mem
++    case $1 in
++        doml_awq)
++            # Full K31 chain. Dev-box proven envelope is a 24 GB slice at
++            # batch $DOML_BATCH; 2g.20gb (20 GB) undercuts it ⇒ 3g.40gb.
++            # Host RAM: 64G = 2× the house 32G DOML budget (container +
++            # calib + restore copies).
++            gpu_resource="$GPU_LARGE"
++            cpus=8
++            mem="64G"
++            ;;
++        *)
++            gpu_resource="$GPU_MEDIUM"
++            cpus=4
++            mem="32G"
++            ;;
++    esac
++}
++
++get_time_limit() {
++    # Alliance Nibi tiers: b1≤3h, b2≤12h, b3≤24h, b4≤72h, b5≤168h.
++    # tesseraq: house precedent ×1 (28 h, b4) — do NOT shrink.
++    # doml: dev-box chain wall + eval suite, ×2+ margin for the slower
++    #       per-SM Nibi MIG slice; never below the 05:00:00 house doml floor.
++    case $1 in
++        doml_awq)  echo "10:00:00" ;;
++        *)         echo "05:00:00" ;;
++    esac
++}
++
++build_python_cmd() {
++    # Prints the job payload. doml emits the full multi-line K31 chain
++    # (idempotent stages, per-stage FATAL guards — requeued jobs resume);
++    # tesseraq emits the house one-liner. Everything except EVAL_DIR is
++    # resolved at submit time; \$EVAL_DIR survives to run at job time.
++    local technique=$1
++    local dd="$DOML_DUMP_DIR"
++
++    # --full_eval = PPL on (wikitext2,c4,ptb) + MMLU + HellaSwag + ARC-Easy +
++    # ARC-Challenge. Each task writes its own row to BILLM_BENCH_CSV.
++    local common_evals="--full_eval"
++
++    case $technique in
++        doml_awq)
++            cat <<CHAIN
++mkdir -p downloads/doml_dumps/${MODEL_SUB}
++echo "=== [1/5] AWQ v1 (alpha=${AWQ_ALPHA}) + DOML K31 build (lam=${DOML_LAMBDA}, g256, fp8 cb, hdiag, intra-block GPTQ, refit2, bulk-K2, rd-split) ==="
++if [ ! -f "${dd}/manifest.json" ]; then
++    CRB_AWQ_ALPHA=${AWQ_ALPHA} python3 -u kernels/pack/doml_group_refit.py --run --model $MODEL --g 256 --dump-dir "${dd}" --codebook-dtype float8_e4m3fn --cb-weight hdiag --intra-block-gptq --refit-iters 2 --bulk-k 2 --rd-split $DOML_LAMBDA || { echo "FATAL: doml awq build failed"; exit 1; }
++else
++    echo "build manifest exists — skipping (idempotent resume)"
++fi
++[ -f "${dd}/awq_scales.safetensors" ] || { echo "FATAL: ${dd}/awq_scales.safetensors missing — this dump is NOT an AWQ build (CRB_AWQ_ALPHA lost, or a stale plain dump squatting on the awqfix tag). Refusing to continue: tuning it would produce a mislabeled row."; exit 1; }
++echo "=== [2/5] stage-1 block tune (batch $DOML_BATCH / stream-chunk $DOML_SCHUNK) ==="
++if [ ! -f "${dd}-btuned/manifest.json" ]; then
++    python3 -u kernels/pack/k31_block_tune.py --src "${dd}" --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || { echo "FATAL: k31_block_tune failed"; exit 1; }
++else
++    echo "btuned manifest exists — skipping (idempotent resume)"
++fi
++echo "=== [3/5] stage-2 assignment tune (pair mode) ==="
++EVAL_DIR="${dd}-btuned"
++if [ ! -f "${dd}-atuned/manifest.json" ]; then
++    python3 -u kernels/pack/k31_assign_tune.py --src "${dd}-btuned" --mode pair --batch $DOML_BATCH --stream-chunk $DOML_SCHUNK || echo "WARN: k31_assign_tune failed — shipping the btuned container (tracker precedent: btuned is a complete honest DOML row)"
++else
++    echo "atuned manifest exists — skipping (idempotent resume)"
++fi
++if [ -f "${dd}-atuned/manifest.json" ] && ls "${dd}-atuned"/*.dpk.safetensors >/dev/null 2>&1; then
++    EVAL_DIR="${dd}-atuned"
++fi
++echo "=== [4/5] honest bpw (k29, on \$EVAL_DIR) ==="
++python3 -u kernels/pack/k29_honest_bpw.py --dir "\$EVAL_DIR" || { echo "FATAL: k29_honest_bpw failed"; exit 1; }
++echo "=== [5/5] restore + full eval (\$EVAL_DIR) ==="
++python3 -u kernels/pack/doml_group_refit.py --run --restore-dpk "\$EVAL_DIR" --eval-extra-ppl --full-eval || { echo "FATAL: restore eval failed"; exit 1; }
++CHAIN
++            ;;
++        *)
++            echo "echo 'Unknown technique: $technique'; exit 1"
++            ;;
++    esac
++}
++
++get_technique_desc() {
++    case $1 in
++        doml_awq)  echo "AWQ v1 (alpha=$AWQ_ALPHA, norm-fed qkv+gate/up, bpw-neutral) + DOML K31 chain (lam=$DOML_LAMBDA g256 fp8-cb hdiag intra-gptq refit2 bulkK2 rd-split -> btune -> atune pair -> honest bpw -> full eval)" ;;
++    esac
++}
++
++# ============================================================================
++# MAIN LOOP
++# ============================================================================
++
++job_count=0
++mkdir -p ./logs ./results
++
++echo "============================================"
++echo "$MODEL PTQ Benchmark Suite (Nibi)"
++echo "============================================"
++echo "Model:       $MODEL"
++echo "Dataset:     $DATASET"
++echo "Seed:        $SEED"
++echo "DOML lam:    $DOML_LAMBDA (provisional rate-matched pick)"
++echo "AWQ alpha:   $AWQ_ALPHA (v1 scope: norm-fed qkv + gate/up)"
++echo "Techniques:  ${techniques[*]}"
++echo "Shared CSV:  $CSV_ABS"
++echo "Logs:        ./logs/"
++echo "============================================"
++echo ""
++
++for technique in "${techniques[@]}"; do
++    technique_desc=$(get_technique_desc "$technique")
++    time_limit=$(get_time_limit "$technique")
++    get_job_resources "$technique"
++
++    job_name="${MODEL_SHORT}_${technique}"
++    python_cmd=$(build_python_cmd "$technique")
++
++    if [[ "$LOCAL_MODE" == true ]]; then
++        echo "========================================"
++        echo "Running locally: $job_name"
++        echo "Config: $technique_desc"
++        echo "Command: $python_cmd"
++        echo "========================================"
++        if [[ -n "${SCRATCH:-}" && -d "${SCRATCH}" ]]; then
++            CACHE_ROOT_LOCAL="$SCRATCH/billm2_cache"
++            DOWNLOADS_LOCAL="$CACHE_ROOT_LOCAL/downloads"
++        else
++            CACHE_ROOT_LOCAL="$(pwd)"
++            DOWNLOADS_LOCAL="$(pwd)/downloads"
++        fi
++        if [[ "$DOWNLOADS_LOCAL" != "$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++            ln -sfn "$DOWNLOADS_LOCAL" ./downloads
++        fi
++        export BILLM_BENCH_CSV="$CSV_ABS"
++        export BILLM_DOWNLOADS_DIR="$DOWNLOADS_LOCAL"
++        export HF_HOME="$CACHE_ROOT_LOCAL/hf"
++        export HF_HUB_CACHE="$BILLM_DOWNLOADS_DIR"
++        export HF_DATASETS_CACHE="$CACHE_ROOT_LOCAL/hf/datasets"
++        export TORCH_HOME="$CACHE_ROOT_LOCAL/torch"
++        export HF_HUB_DISABLE_XET=1
++        export NUMBA_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/numba"
++        export PIP_CACHE_DIR="$CACHE_ROOT_LOCAL/.cache/pip"
++        export XDG_CACHE_HOME="$CACHE_ROOT_LOCAL/.cache"
++        export TMPDIR="${SLURM_TMPDIR:-$CACHE_ROOT_LOCAL/tmp}"
++        mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TORCH_HOME" \
++                 "$NUMBA_CACHE_DIR" "$PIP_CACHE_DIR" "$XDG_CACHE_HOME" "$TMPDIR" \
++                 "$BILLM_DOWNLOADS_DIR"
++        export HF_DATASETS_OFFLINE=1
++        export TRANSFORMERS_OFFLINE=1
++        export HF_HUB_OFFLINE=1
++        export PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/src
++        export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++        eval "$python_cmd"
++        ((job_count++))
++        continue
++    fi
++
++    account_line=""
++    if [[ -n "$ACCOUNT" ]]; then
++        account_line="#SBATCH --account=$ACCOUNT"
++    fi
++
++    sbatch_id=$(sbatch --parsable <<EOF
++#!/bin/bash
++#SBATCH --job-name=$job_name
++#SBATCH --output=./logs/${job_name}_%j.out
++#SBATCH --error=./logs/${job_name}_%j.err
++#SBATCH --time=$time_limit
++#SBATCH $gpu_resource
++#SBATCH --cpus-per-task=$cpus
++#SBATCH --mem=$mem
++#SBATCH --ntasks-per-node=1
++#SBATCH --nodes=1
++$account_line
++
++module load gcc arrow scipy-stack cuda cudnn
++source ./env/bin/activate
++# Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
++# tqdm / accelerate / typing_extensions from \$HOME/.local/. Do NOT set
++# PYTHONNOUSERSITE=1 here.
++
++if [[ -n "\${SCRATCH:-}" && -d "\${SCRATCH}" ]]; then
++    CACHE_ROOT="\$SCRATCH/billm2_cache"
++else
++    CACHE_ROOT="\$(pwd)/downloads"
++fi
++
++if [[ "\$CACHE_ROOT" != "\$(pwd)/downloads" && ! -L ./downloads && ! -e ./downloads ]]; then
++    ln -sfn "\$CACHE_ROOT" ./downloads
++fi
++
++export BILLM_DOWNLOADS_DIR="\$CACHE_ROOT/downloads"
++export HF_HOME="\$CACHE_ROOT/hf"
++export HF_HUB_CACHE="\$BILLM_DOWNLOADS_DIR"
++export HF_DATASETS_CACHE="\$CACHE_ROOT/hf/datasets"
++export TORCH_HOME="\$CACHE_ROOT/torch"
++export HF_HUB_DISABLE_XET=1
++export NUMBA_CACHE_DIR="\$CACHE_ROOT/.cache/numba"
++export PIP_CACHE_DIR="\$CACHE_ROOT/.cache/pip"
++export XDG_CACHE_HOME="\$CACHE_ROOT/.cache"
++if [[ -n "\${SLURM_TMPDIR:-}" && -d "\${SLURM_TMPDIR}" ]]; then
++    export TMPDIR="\$SLURM_TMPDIR"
++else
++    export TMPDIR="\$CACHE_ROOT/tmp"
++fi
++mkdir -p "\$HF_HOME" "\$HF_DATASETS_CACHE" "\$HF_HUB_CACHE" "\$TORCH_HOME" \\
++         "\$NUMBA_CACHE_DIR" "\$PIP_CACHE_DIR" "\$XDG_CACHE_HOME" "\$TMPDIR" \\
++         "\$BILLM_DOWNLOADS_DIR"
++
++export HF_DATASETS_OFFLINE=1
++export TRANSFORMERS_OFFLINE=1
++export HF_HUB_OFFLINE=1
++
++export BILLM_BENCH_CSV="$CSV_ABS"
++
++# kernels/pack tools resolve the repo root from CRB_REPO (rerun-campaign fix).
++export CRB_REPO="\$(pwd)"
++
++export PYTHONPATH=\$PYTHONPATH:\$(pwd):\$(pwd)/src
++
++# Tune stages / TesseraQ on MIG slices need expandable segments (tracker
++# lesson 2026-07-22; same fix as LNQ Fisher).
++export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++
++echo '========================================'
++echo "Job:        $job_name"
++echo "Model:      $MODEL"
++echo "Technique:  $technique"
++echo "Config:     $technique_desc"
++echo "Dataset:    $DATASET"
++echo "Seed:       $SEED"
++echo "Time limit: $time_limit"
++echo "GPU:        $gpu_resource"
++echo "CPUs / Mem: $cpus / $mem"
++echo "CSV:        \$BILLM_BENCH_CSV"
++echo "Cache root: \$CACHE_ROOT (\$HF_HOME)"
++echo "TMPDIR:     \$TMPDIR"
++echo "Started:    \$(date)"
++echo "SLURM job:  \$SLURM_JOB_ID"
++echo '========================================'
++echo "Python:             \$(which python)"
++python --version
++echo "CUDA_VISIBLE_DEVICES=\$CUDA_VISIBLE_DEVICES"
++# Sanity check: aborts before GPU time is spent if the venv is broken or
++# too old for this model family.
++python -c "from transformers import LlamaForCausalLM; import transformers; print('transformers', transformers.__version__)" || {
++    echo "FATAL: LlamaForCausalLM not importable — check transformers install (SmolLM2 is a LlamaForCausalLM checkpoint)."
++    exit 1
++}
++python -c "from kernels.pack.awq_transform import collect_awq_scales, apply_awq_" || {
++    echo "FATAL: kernels/pack/awq_transform.py not importable — checkout must carry the committed AWQ machinery (>= 7634dea) with the patch applied."
++    exit 1
++}
++ls -d "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR 2>/dev/null || {
++    echo "FATAL: no $MODEL snapshot under \$BILLM_DOWNLOADS_DIR — run ./sbatch/download_cache.sh first."
++    exit 1
++}
++# Phase 11: refs/main is a prerequisite for offline from_pretrained under
++# HF_HUB_OFFLINE=1 (Gotcha #22).
++for _refs in "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR/refs/main; do
++    [ -s "\$_refs" ] || {
++        echo "FATAL: \$_refs missing or empty."
++        echo "       Re-run ./sbatch/download_cache.sh — needs"
++        echo "       snapshot_download(..., local_files_only=True) second pass."
++        exit 1
++    }
++done
++nvidia-smi || true
++$python_cmd
++echo '========================================'
++echo "Finished:   \$(date)"
++echo '========================================'
++EOF
++)
++    echo "  [$sbatch_id] $job_name  ($technique_desc, t=${time_limit}, gpu=${gpu_resource#--gres=gpu:})"
++    ((job_count++))
++done
++
++echo ""
++echo "============================================"
++echo "Total jobs submitted: $job_count"
++echo "Results CSV:          $CSV_ABS"
++echo "Logs directory:       ./logs/"
++echo "============================================"
 diff --git a/sbatch/run_smollm2_1.7b_benchmark.sh b/sbatch/run_smollm2_1.7b_benchmark.sh
 new file mode 100755
 index 0000000..792cf59
@@ -3544,7 +4464,7 @@ index d2e3d2a..628610a 100644
          return llama_eval
      if "qwen" in name or "smollm" in name:
 diff --git a/src/run_tesseraq.py b/src/run_tesseraq.py
-index dfa0219..ad5b89c 100644
+index dfa0219..3f20f82 100644
 --- a/src/run_tesseraq.py
 +++ b/src/run_tesseraq.py
 @@ -312,6 +312,33 @@ def get_awq_subsets(block, model_type):
@@ -3581,7 +4501,7 @@ index dfa0219..ad5b89c 100644
      if model_type == 'opt':
          subsets = [
              {
-@@ -571,6 +598,8 @@ def detect_model_type(model):
+@@ -571,8 +598,15 @@ def detect_model_type(model):
          return 'opt'
      elif 'llama' in class_name:
          return 'llama'
@@ -3589,8 +4509,15 @@ index dfa0219..ad5b89c 100644
 +        return 'olmo2'
      elif 'qwen' in class_name:
          return 'qwen'
++    elif 'granite' in class_name:
++        # Granite blocks expose the same module layout as llama
++        # (input_layernorm -> q/k/v, post_attention_layernorm -> gate/up);
++        # the granite-specific scalar multipliers live inside forward.
++        return 'llama'
      raise ValueError(f"Unknown model class: {model.__class__.__name__}")
-@@ -586,7 +615,7 @@ def get_blocks_and_kwargs(model, dev, trainloader, nsamples, seqlen):
+ 
+ 
+@@ -586,7 +620,7 @@ def get_blocks_and_kwargs(model, dev, trainloader, nsamples, seqlen):
          model.model.decoder.embed_positions = model.model.decoder.embed_positions.to(dev)
          if hasattr(model.model.decoder, 'project_in') and model.model.decoder.project_in:
              model.model.decoder.project_in = model.model.decoder.project_in.to(dev)
@@ -3599,7 +4526,7 @@ index dfa0219..ad5b89c 100644
          layers = model.model.layers
          model.model.embed_tokens = model.model.embed_tokens.to(dev)
          if hasattr(model.model, 'rotary_emb'):
-@@ -632,7 +661,7 @@ def get_blocks_and_kwargs(model, dev, trainloader, nsamples, seqlen):
+@@ -632,7 +666,7 @@ def get_blocks_and_kwargs(model, dev, trainloader, nsamples, seqlen):
          model.model.decoder.embed_positions = model.model.decoder.embed_positions.cpu()
          if hasattr(model.model.decoder, 'project_in') and model.model.decoder.project_in:
              model.model.decoder.project_in = model.model.decoder.project_in.cpu()
@@ -3608,7 +4535,7 @@ index dfa0219..ad5b89c 100644
          model.model.embed_tokens = model.model.embed_tokens.cpu()
          if hasattr(model.model, 'rotary_emb'):
              model.model.rotary_emb = model.model.rotary_emb.cpu()
-@@ -1018,13 +1047,24 @@ def get_model(model_name):
+@@ -1018,13 +1052,24 @@ def get_model(model_name):
              use_safetensors=True, attn_implementation="eager",
          )
          model.seqlen = model.config.max_position_embeddings
@@ -3634,6 +4561,22 @@ index dfa0219..ad5b89c 100644
      elif "qwen" in model_name.lower():
          from transformers import AutoModelForCausalLM
          model = AutoModelForCausalLM.from_pretrained(
+@@ -1032,6 +1077,15 @@ def get_model(model_name):
+             attn_implementation="eager",
+         )
+         model.seqlen = min(model.config.max_position_embeddings, 2048)
++    elif "granite" in model_name.lower():
++        # GraniteForCausalLM (ibm-granite/granite-3.3-2b-base): llama-style
++        # pre-norm blocks plus scalar multipliers applied inside forward.
++        from transformers import AutoModelForCausalLM
++        model = AutoModelForCausalLM.from_pretrained(
++            model_name, torch_dtype="auto", cache_dir=downloads_dir,
++            use_safetensors=True, attn_implementation="eager",
++        )
++        model.seqlen = min(model.config.max_position_embeddings, 2048)
+     else:
+         raise ValueError(f"Unsupported model: {model_name}")
+ 
 diff --git a/utils/autosearch.py b/utils/autosearch.py
 index c46209c..68e0b67 100644
 --- a/utils/autosearch.py

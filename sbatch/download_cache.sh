@@ -29,9 +29,12 @@ set -euo pipefail
 # resolves to the module-provided python/3.11 (via scipy-stack).
 module load gcc arrow scipy-stack cuda cudnn
 source ./env/bin/activate
-# Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
-# tqdm / accelerate / typing_extensions from $HOME/.local/. Do NOT set
-# PYTHONNOUSERSITE=1 here. The torchvision ABI crash is fixed separately
+# Note: the venv legitimately borrows idna / certifi / yaml / tqdm /
+# accelerate / typing_extensions from $HOME/.local/. Do NOT set
+# PYTHONNOUSERSITE=1 here. Exception: safetensors must live IN ./env at
+# >=0.6.1 — the ~/.local copy predates torch.uint32 and KeyError'd every
+# dpk save (jobs 18481807/09/11): ./env/bin/pip install -U 'safetensors>=0.6.1'.
+# The torchvision ABI crash is fixed separately
 # by uninstalling torchvision/torchaudio from ~/.local (see
 # ./sbatch/fix_venv_torchvision.sh).
 
@@ -176,15 +179,17 @@ models = [
     'NousResearch/Meta-Llama-3.1-8B',
     # New-model generalization arm (2026-07-24): DOML K31 chain + TesseraQ
     # via run_smollm2_1.7b_benchmark.sh / run_olmo2_1b_benchmark.sh /
-    # run_helium_2b_benchmark.sh. All three are
+    # run_granite_3.3_2b_benchmark.sh. All three are
     # UNGATED — no token needed (the .hf_token pickup above is harmless).
-    # (Falcon3 dropped 2026-07-24: verdict decided on dev box, TQ wins it.)
-    # SmolLM2 / Helium-1 are LlamaForCausalLM checkpoints; OLMo-2
-    # needs transformers>=4.47 (Olmo2ForCausalLM), Helium-1 needs >=4.49
-    # (helium model_type in AutoConfig) — both verified below.
+    # (Falcon3 dropped 2026-07-24: verdict decided on dev box, TQ wins it.
+    #  kyutai/helium-1-2b dropped 2026-07-24: released checkpoint unusable —
+    #  FP16 baseline wt2 418 on dev box; replaced by granite-3.3-2b-base.)
+    # SmolLM2 is a LlamaForCausalLM checkpoint; OLMo-2 needs
+    # transformers>=4.47 (Olmo2ForCausalLM); Granite-3.3 uses the repo's
+    # long-standing native granite plumbing.
     'HuggingFaceTB/SmolLM2-1.7B',
     'allenai/OLMo-2-0425-1B',
-    'kyutai/helium-1-2b',
+    'ibm-granite/granite-3.3-2b-base',
 ]
 
 for model_name in models:
@@ -226,9 +231,9 @@ except Exception as exc:
         'Check transformers install (see fix_venv_torchvision.sh for ABI fixes).'
     )
 # New-model arm (2026-07-24): OLMo-2 requires Olmo2ForCausalLM (transformers
-# >= 4.47); Helium-1 requires the helium model_type (>= 4.49) even though the
-# runner loads it through the LlamaForCausalLM branch. Abort here rather than
-# in-job if the venv's transformers predates either.
+# >= 4.47); Granite-3.3 requires GraniteForCausalLM (long-supported). Abort
+# here rather than in-job if the venv's transformers predates either.
+# (helium guard removed 2026-07-24 — model dropped, checkpoint unusable.)
 try:
     from transformers.models.olmo2 import Olmo2ForCausalLM  # noqa: F401
     print(f'Olmo2ForCausalLM import OK.')
@@ -238,12 +243,12 @@ except Exception as exc:
         'transformers >= 4.47 is required for allenai/OLMo-2-0425-1B.'
     )
 try:
-    from transformers.models.helium import configuration_helium  # noqa: F401
-    print(f'helium model_type import OK.')
+    from transformers import GraniteForCausalLM  # noqa: F401
+    print(f'GraniteForCausalLM import OK.')
 except Exception as exc:
     raise SystemExit(
-        f'FATAL: helium model_type not importable ({exc!r}). '
-        'transformers >= 4.49 is required for kyutai/helium-1-2b.'
+        f'FATAL: GraniteForCausalLM not importable ({exc!r}). '
+        'Needed for ibm-granite/granite-3.3-2b-base.'
     )
 "
 

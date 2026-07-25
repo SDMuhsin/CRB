@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# allenai/OLMo-2-0425-1B — 2-bit PTQ benchmark: DOML K31 chain + TesseraQ (Nibi)
+# ibm-granite/granite-3.3-2b-base — 2-bit PTQ benchmark: DOML K31 chain + TesseraQ (Nibi)
 # ============================================================================
 #
 # Sister script to run_llama3_1b_benchmark.sh / run_qwen_1.7b_benchmark.sh,
@@ -23,7 +23,7 @@
 #   tesseraq — TesseraQ paper-exact (ICLR 2025 recipe, identical arguments
 #              to every other model's tesseraq cell in this suite).
 #
-# Model facts: OLMo-2-0425-1B, Olmo2ForCausalLM (norm-after arch), fp32 checkpoint loaded bf16. Dev-box K31 chain wall (24 GB slice, batch2): build 2583s + btune 689s + atune 2221s + eval 1672s ≈ 2.0 h.
+# Model facts: Granite-3.3 2B base (GraniteForCausalLM, 40 layers, h=2048, ~2.5B params). Repo has NATIVE granite plumbing (run.py/eval_utils 'granite' branches predate this campaign). Substituted 2026-07-24 for kyutai/helium-1-2b, whose released checkpoint is unusable (FP16 baseline wt2 418 on dev box — model broken as shipped, not a harness/DOML issue). 40 layers => longer chain than helium; walltime sized accordingly.
 #
 # Dev-box measurements (2026-07-24, Blackwell MIG slices — used for sizing,
 # never undercut):
@@ -35,16 +35,16 @@
 #     precedent for this size class (4g.40gb is NOT provisioned on Nibi,
 #     Gotcha #33 — the house 1.7B tesseraq profile is GPU_FULL + 160G).
 #
-# PREREQ: nibi_sync.patch applied (the olmo2 family mappings in run.py /
+# PREREQ: nibi_sync.patch applied (the campaign fixes in run.py /
 # src/eval_utils.py / src/run_tesseraq.py and the kernels/pack fixes are
 # uncommitted on the dev box — without them every job here crashes with
 # "Unsupported model"), and ./sbatch/download_cache.sh re-run (fetches
-# allenai/OLMo-2-0425-1B + the namespaced wikitext repo).
+# ibm-granite/granite-3.3-2b-base + the namespaced wikitext repo).
 #
 # Usage:
-#   ./sbatch/run_olmo2_1b_benchmark.sh                      # submit both jobs
-#   ./sbatch/run_olmo2_1b_benchmark.sh --account def-foo
-#   ./sbatch/run_olmo2_1b_benchmark.sh --local              # run serially, no SLURM
+#   ./sbatch/run_granite_3.3_2b_benchmark.sh                      # submit both jobs
+#   ./sbatch/run_granite_3.3_2b_benchmark.sh --account def-foo
+#   ./sbatch/run_granite_3.3_2b_benchmark.sh --local              # run serially, no SLURM
 #
 # ============================================================================
 
@@ -82,30 +82,30 @@ done
 # CONFIGURATION
 # ============================================================================
 
-MODEL="allenai/OLMo-2-0425-1B"
-MODEL_SHORT="olmo2_1b"
-MODEL_SUB="olmo2-1b"                # downloads/doml_dumps/<sub>/ dump subdir
+MODEL="ibm-granite/granite-3.3-2b-base"
+MODEL_SHORT="granite33_2b"
+MODEL_SUB="granite33-2b"                # downloads/doml_dumps/<sub>/ dump subdir
 DATASET="wikitext2"
 SEED=0
 
 # HF cache directory uses the canonical models--<org>--<repo> layout.
-MODEL_CACHE_DIR="models--allenai--OLMo-2-0425-1B"
+MODEL_CACHE_DIR="models--ibm-granite--granite-3.3-2b-base"
 
 CSV_NAME="${MODEL_SHORT}_ptq_benchmark.csv"
 CSV_ABS="$(pwd)/results/$CSV_NAME"
 
 # ----------------------------------------------------------------------------
 # DOML λ (rd-split rate weight) — PROVISIONAL best-known rate-matched pick.
-# 19e-5 beat the 16e-5 arm on the dev box (honest bpw 2.1855, rate-matched; 2026-07-24).
+# 16e-5 is the dev-box rate-matched pick (honest bpw 2.1160; matches the paper Qwen3-1.7B/Llama-3.2-1B λ; 2026-07-24).
 # Re-pick only if the honest-bpw log lands far off the ≤2.25-class target
 # (tracker λ-audit rule). The dump dir name tracks this value.
 # ----------------------------------------------------------------------------
-DOML_LAMBDA="19e-5"
+DOML_LAMBDA="16e-5"
 # Tune-stage memory knobs, measured on the dev box for THIS model (24 GB
 # slice envelope). Do not raise on MIG slices without re-measuring.
 DOML_BATCH=2
 DOML_SCHUNK=2
-DOML_DUMP_DIR="downloads/doml_dumps/${MODEL_SUB}/k31-olmo2-lam${DOML_LAMBDA}-g256"
+DOML_DUMP_DIR="downloads/doml_dumps/${MODEL_SUB}/k31-granite-lam${DOML_LAMBDA}-g256"
 
 # Nibi GRES strings. Full long-form MIG names are REQUIRED — short forms
 # like `1g.10gb` are rejected (Gotcha #11). 4g.40gb is NOT provisioned
@@ -178,7 +178,7 @@ get_time_limit() {
     # doml: dev-box chain wall + eval suite, ×2+ margin for the slower
     #       per-SM Nibi MIG slice; never below the 05:00:00 house doml floor.
     case $1 in
-        doml)      echo "10:00:00" ;;
+        doml)      echo "14:00:00" ;;
         tesseraq)  echo "28:00:00" ;;
         *)         echo "05:00:00" ;;
     esac
@@ -406,8 +406,8 @@ python --version
 echo "CUDA_VISIBLE_DEVICES=\$CUDA_VISIBLE_DEVICES"
 # Sanity check: aborts before GPU time is spent if the venv is broken or
 # too old for this model family.
-python -c "from transformers.models.olmo2 import Olmo2ForCausalLM; import transformers; print('transformers', transformers.__version__)" || {
-    echo "FATAL: Olmo2ForCausalLM not importable — transformers is too old (<4.47) for OLMo-2."
+python -c "from transformers import GraniteForCausalLM; import transformers; print('transformers', transformers.__version__)" || {
+    echo "FATAL: GraniteForCausalLM not importable — transformers too old for Granite-3.3."
     exit 1
 }
 ls -d "\$BILLM_DOWNLOADS_DIR"/$MODEL_CACHE_DIR 2>/dev/null || {

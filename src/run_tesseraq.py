@@ -602,6 +602,11 @@ def detect_model_type(model):
         return 'olmo2'
     elif 'qwen' in class_name:
         return 'qwen'
+    elif 'granite' in class_name:
+        # Granite blocks expose the same module layout as llama
+        # (input_layernorm -> q/k/v, post_attention_layernorm -> gate/up);
+        # the granite-specific scalar multipliers live inside forward.
+        return 'llama'
     raise ValueError(f"Unknown model class: {model.__class__.__name__}")
 
 
@@ -1070,6 +1075,15 @@ def get_model(model_name):
         model = AutoModelForCausalLM.from_pretrained(
             model_name, torch_dtype="auto", cache_dir=downloads_dir,
             attn_implementation="eager",
+        )
+        model.seqlen = min(model.config.max_position_embeddings, 2048)
+    elif "granite" in model_name.lower():
+        # GraniteForCausalLM (ibm-granite/granite-3.3-2b-base): llama-style
+        # pre-norm blocks plus scalar multipliers applied inside forward.
+        from transformers import AutoModelForCausalLM
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype="auto", cache_dir=downloads_dir,
+            use_safetensors=True, attn_implementation="eager",
         )
         model.seqlen = min(model.config.max_position_embeddings, 2048)
     else:

@@ -354,9 +354,11 @@ $account_line
 
 module load gcc arrow scipy-stack cuda cudnn
 source ./env/bin/activate
-# Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
-# tqdm / accelerate / typing_extensions from \$HOME/.local/. Do NOT set
-# PYTHONNOUSERSITE=1 here.
+# Note: the venv legitimately borrows idna / certifi / yaml / tqdm /
+# accelerate / typing_extensions from \$HOME/.local/. Do NOT set
+# PYTHONNOUSERSITE=1 here. Exception: safetensors must live IN ./env at
+# >=0.6.1 — the ~/.local copy predates torch.uint32 and killed the doml-arm
+# builds (sdoml arms don't write dpk containers, but keep ./env current).
 
 # Route every cache to \$SCRATCH (1 TB soft / 20 TB hard on Nibi).
 if [[ -n "\${SCRATCH:-}" && -d "\${SCRATCH}" ]]; then

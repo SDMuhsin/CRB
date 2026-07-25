@@ -54,6 +54,7 @@
 
 ACCOUNT=""
 LOCAL_MODE=false
+METHODS_FILTER=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -65,9 +66,13 @@ while [[ $# -gt 0 ]]; do
             LOCAL_MODE=true
             shift
             ;;
+        --methods)
+            METHODS_FILTER="${2:?--methods requires a comma-separated list, e.g. doml or doml,tesseraq}"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--account SLURM_ACCOUNT] [--local]"
+            echo "Usage: $0 [--account SLURM_ACCOUNT] [--local] [--methods doml,tesseraq]"
             exit 1
             ;;
     esac
@@ -123,6 +128,17 @@ techniques=(
     "doml"
     "tesseraq"
 )
+
+# --methods (comma list) restricts submission — e.g. `--methods doml` resubmits
+# one arm without duplicating the other's queued/running job.
+if [[ -n "$METHODS_FILTER" ]]; then
+    _filtered=()
+    for _t in "${techniques[@]}"; do
+        [[ ",$METHODS_FILTER," == *",$_t,"* ]] && _filtered+=("$_t")
+    done
+    (( ${#_filtered[@]} > 0 )) || { echo "FATAL: --methods '$METHODS_FILTER' matches none of: ${techniques[*]}"; exit 1; }
+    techniques=("${_filtered[@]}")
+fi
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -184,6 +200,8 @@ build_python_cmd() {
         doml)
             cat <<CHAIN
 mkdir -p downloads/doml_dumps/${MODEL_SUB}
+echo "=== [0/5] preflight: safetensors torch.uint32 round-trip (dpk container dtype) ==="
+python3 -c "import os, tempfile, torch, safetensors; from safetensors.torch import save_file, load_file; p = os.path.join(tempfile.gettempdir(), 'st_u32_probe.safetensors'); save_file({'t': torch.zeros(8, dtype=torch.int32).view(torch.uint32)}, p); load_file(p); os.remove(p); print('preflight OK: safetensors', safetensors.__version__, 'at', safetensors.__file__)" || { echo "FATAL: safetensors cannot serialize torch.uint32 — dpk containers need safetensors>=0.6.1 inside ./env (a stale ~/.local copy may be shadowing it). Fix on the login node: ./env/bin/pip install -U 'safetensors>=0.6.1'"; exit 1; }
 echo "=== [1/5] DOML K31 build (lam=${DOML_LAMBDA}, g256, fp8 cb, hdiag, intra-block GPTQ, refit2, bulk-K2, rd-split) ==="
 if [ ! -f "${dd}/manifest.json" ]; then
     python3 -u kernels/pack/doml_group_refit.py --run --model $MODEL --g 256 --dump-dir "${dd}" --codebook-dtype float8_e4m3fn --cb-weight hdiag --intra-block-gptq --refit-iters 2 --bulk-k 2 --rd-split $DOML_LAMBDA || { echo "FATAL: doml build failed"; exit 1; }
@@ -318,9 +336,11 @@ $account_line
 
 module load gcc arrow scipy-stack cuda cudnn
 source ./env/bin/activate
-# Note: the venv legitimately borrows idna / certifi / safetensors / yaml /
-# tqdm / accelerate / typing_extensions from \$HOME/.local/. Do NOT set
-# PYTHONNOUSERSITE=1 here.
+# Note: the venv legitimately borrows idna / certifi / yaml / tqdm /
+# accelerate / typing_extensions from \$HOME/.local/. Do NOT set
+# PYTHONNOUSERSITE=1 here. Exception: safetensors must live IN ./env at
+# >=0.6.1 — the ~/.local copy predates torch.uint32 and KeyError'd every
+# dpk save (jobs 18481807/09/11); the [0/5] preflight guards this.
 
 if [[ -n "\${SCRATCH:-}" && -d "\${SCRATCH}" ]]; then
     CACHE_ROOT="\$SCRATCH/billm2_cache"

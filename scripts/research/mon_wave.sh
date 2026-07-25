@@ -2,7 +2,7 @@
 # Event monitor: exits the instant a NEW pipeline reaches eval (slice freed + result ready)
 # or the b8 job finishes. Bounded (75*60s = 75min cap). NFS-wobble tolerant. No spin-loop.
 LOG=/scratch/ckp908/crb/logs/rerun
-DRVS="pipe_awqfix05-rep2-lam11e-5-g256 pipe_k31-falcon3-lam32e-5-g256 pipe_k31-smollm2-lam32e-5-g256 pipe_k31-olmo2-lam19e-5-g256 pipe_k31-helium-lam16e-5-g256 pipe_tq-chain"
+DRVS="pipe_k31-granite-lam16e-5-g256 pipe_tq-chain"
 
 # baseline COUNTS per line type per drv: fires whenever a drv gains a NEW
 # eval/rawRT line (handles multi-eval drvs like the TQ chain).
