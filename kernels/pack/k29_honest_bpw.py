@@ -32,6 +32,7 @@ import sys
 
 import numpy as np
 import torch
+from safetensors import safe_open
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dpk_unpack  # noqa: E402
@@ -61,6 +62,8 @@ def main():
     cb_bits_honest = 0            # sum_p K_p * 8  per (row,group)
     cb_bits_naive = 0             # 12 * 8 per (row,group)
     s_bits = 0
+    osf_bits = 0                  # G5 per-(row,group) bf16 scale planes
+    n_osf_files = 0
     memb_chunks = []              # non-salient membership bits (as K28)
     # global per-partition max level count (for reporting the config detected)
     global_kmax = [0, 0, 0]
@@ -76,6 +79,20 @@ def main():
         total_w += R * C_orig
         for t in tensors.values():
             naive_bytes += t.numel() * t.element_size()
+
+        # G5 osf plane: a sibling .osf.safetensors holds bf16 [R, NG]
+        # per-(row,group) output scales (wq = bf16(osf_col * unpack)).
+        # Counted at actual stored size; shape/dtype are validated.
+        osf_fp = fp.replace(".dpk.safetensors", ".osf.safetensors")
+        if os.path.exists(osf_fp):
+            with safe_open(osf_fp, framework="pt", device="cpu") as f_osf:
+                osf = f_osf.get_tensor("osf")
+            if osf.dtype != torch.bfloat16 or tuple(osf.shape) != (R, NG):
+                raise SystemExit(f"{osf_fp}: osf is {osf.dtype}"
+                                 f"{tuple(osf.shape)}, expected "
+                                 f"bfloat16 ({R}, {NG})")
+            osf_bits += osf.numel() * osf.element_size() * 8
+            n_osf_files += 1
 
         realcol = torch.arange(C) < C_orig                 # [C]
         real = realcol.unsqueeze(0).expand(R, C)           # [R,C]
@@ -166,6 +183,10 @@ def main():
     H = 0.0 if p_t in (0.0, 1.0) else \
         -(p_t * np.log2(p_t) + (1 - p_t) * np.log2(1 - p_t))
 
+    if n_osf_files and n_osf_files != len(files):
+        raise SystemExit(f"osf planes present on {n_osf_files}/{len(files)} "
+                         f"layers — partial G5 osf dump, refusing to report")
+
     naive_bpw = naive_bytes * 8 / total_w
     code_h = code_bits_honest / total_w
     code_n = code_bits_naive / total_w
@@ -173,7 +194,8 @@ def main():
     cb_n = cb_bits_naive / total_w
     s_bpw = s_bits / total_w
     memb_h = memb_lzma_bits / total_w
-    honest = code_h + cb_h + s_bpw + memb_h
+    osf_bpw = osf_bits / total_w
+    honest = code_h + cb_h + s_bpw + memb_h + osf_bpw
 
     fracs = [c / sum(part_counts) for c in part_counts]
     print(f"dir={args.dir}")
@@ -194,6 +216,9 @@ def main():
     print(f"  codebooks (real K_p fp8 slots) = {cb_h:.4f}")
     print(f"  salient bitmap s               = {s_bpw:.4f}")
     print(f"  membership lzma (VERIFIED)     = {memb_h:.4f}")
+    if n_osf_files:
+        print(f"  G5 osf scales (bf16, {n_osf_files} layers) = "
+              f"{osf_bpw:.4f}")
     print(f"HONEST bpw (mixed-K)             = {honest:.4f}  "
           f"[reduced-code + membership round-trip lossless VERIFIED]")
 

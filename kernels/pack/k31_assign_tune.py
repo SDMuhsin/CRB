@@ -159,7 +159,7 @@ class AssignLinear(nn.Module):
     """
 
     def __init__(self, sub: kbt.SublayerCodebook, n_real_src, bias,
-                 gamma, mode, h0=0.15):
+                 gamma, mode, h0=0.15, osf=False):
         super().__init__()
         assert mode in ("soft", "hardste", "pair")
         self.mode = mode
@@ -220,6 +220,14 @@ class AssignLinear(nn.Module):
             self.logits = nn.Parameter(logits)
         self.delta = nn.Parameter(torch.zeros_like(sub.lev0))
         self.bias = bias                                   # frozen
+        # G5 osf: continuous per-(row,group) OUTPUT scale (TesseraQ dequant-
+        # scale analog). u=0 => scale exactly 1.0 => byte-identical start.
+        self.use_osf = bool(osf)
+        if self.use_osf:
+            self.register_buffer(
+                "colg",
+                torch.arange(C, device=dev, dtype=torch.int64) // sub.g)
+            self.u = nn.Parameter(torch.zeros(R, sub.NG, device=dev))
 
     # ---- levels (stage-1 semantics) ----
     def master(self):
@@ -229,6 +237,12 @@ class AssignLinear(nn.Module):
         m = self.master()
         p = m.to(FP8).to(torch.float32)
         return m + (p - m).detach()
+
+    def osf_ste(self):
+        # forward on the bf16 grid the artifact stores; grad straight-through
+        m = 1.0 + self.u
+        b = m.to(torch.bfloat16).to(torch.float32)
+        return m + (b - m).detach()
 
     # ---- assignments ----
     def masked_logits(self):
@@ -283,6 +297,8 @@ class AssignLinear(nn.Module):
                 W = levA + use_alt * (levB - levA)
             else:
                 W = levA + self.h_pair() * (levB - levA)
+            if self.use_osf:
+                W = self.osf_ste()[:, self.colg] * W
             return W.to(torch.bfloat16)
         lev4 = self._lev4()
         if self.hard:
@@ -296,6 +312,8 @@ class AssignLinear(nn.Module):
                 W = lev4.gather(2, k.unsqueeze(-1)).squeeze(-1)
         else:
             W = (self.probs() * lev4).sum(-1)
+        if self.use_osf:
+            W = self.osf_ste()[:, self.colg] * W
         return W.to(torch.bfloat16)
 
     def forward(self, x):
@@ -311,6 +329,20 @@ class _Shim:                    # minimal `sub` stand-in for TunedQuantLinear
     pass
 
 
+class OsfTunedQuantLinear(kbt.TunedQuantLinear):
+    """Stage-1 retune module + FROZEN committed per-(row,group) output scale
+    on the bf16 grid: W = bf16(osf_col * fp8_STE(levels)[idx]) — the exact
+    G5 deployment formula."""
+
+    def __init__(self, sub, bias, osf_col_bf16):
+        super().__init__(sub, bias)
+        self.register_buffer("osf_col", osf_col_bf16)
+
+    def weight_bf16(self):
+        W = self.levels_ste().gather(1, self.idx)
+        return (self.osf_col.to(torch.float32) * W).to(torch.bfloat16)
+
+
 # ---------------------------------------------------------------------------
 # per-block stage-2 tuning
 # ---------------------------------------------------------------------------
@@ -322,7 +354,8 @@ def lr_factor(step, total, floor=0.1):
 def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
                       device, log):
     """Returns (final frozen block, {name: cb fp8 [R,NG,3,4] cpu},
-    {name: committed codes uint8 [R,C_orig] cpu}, stats)."""
+    {name: committed codes uint8 [R,C_orig] cpu},
+    {name: committed osf bf16 [R,NG] cpu} or None, stats)."""
     t0 = time.time()
     block_q = copy.deepcopy(block_fp).to(device)
     for p in block_q.parameters():
@@ -339,7 +372,8 @@ def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
         sub = subs[name]
         assert tuple(lin.weight.shape) == (sub.R, sub.C_orig), name
         ql = AssignLinear(sub, nreals[name], lin.bias, args.gamma,
-                          args.mode, h0=args.h0).to(device)
+                          args.mode, h0=args.h0,
+                          osf=bool(args.osf)).to(device)
         setattr(parent, parts[-1], ql)
         qlin[name] = ql
 
@@ -353,11 +387,15 @@ def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
     assign_params = [ql.v if args.mode == "pair" else ql.logits
                      for ql in qlin.values()]
     delta_params = [ql.delta for ql in qlin.values()]
-    opt = torch.optim.Adam([
+    groups = [
         {"params": assign_params, "lr": args.lr},
         {"params": delta_params, "lr": args.lr_lev},
-    ])
-    all_params = assign_params + delta_params
+    ]
+    osf_params = [ql.u for ql in qlin.values()] if args.osf else []
+    if osf_params:
+        groups.append({"params": osf_params, "lr": args.lr_osf})
+    opt = torch.optim.Adam(groups)
+    all_params = assign_params + delta_params + osf_params
 
     gen = torch.Generator().manual_seed(20_000 + bi)
     N = x_q.shape[0]
@@ -432,6 +470,8 @@ def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
         opt.param_groups[0]["lr"] = args.lr * f
         opt.param_groups[1]["lr"] = (
             0.0 if step < t_ph1 else args.lr_lev * f)
+        if len(opt.param_groups) > 2:
+            opt.param_groups[2]["lr"] = args.lr_osf * f   # co-equal schedule
         sel = torch.randperm(N, generator=gen)[:args.batch]
         out = kbt._block_forward(block_q, x_q[sel], kw)
         mse = (out.float() - target[sel].float()).pow(2).mean()
@@ -494,9 +534,12 @@ def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
     n_flip, n_w, n_unsat = 0, 0, 0
     ent_end = 0.0
     codes_new = {}
+    osf_new = {} if args.osf else None
     with torch.no_grad():
         for name in SUBLAYER_NAMES:
             ql = qlin[name]
+            if args.osf:
+                osf_new[name] = (1.0 + ql.u.detach()).to(torch.bfloat16)
             k = ql.committed_codes()
             n_flip += int((k != ql.code0.to(torch.int64)).sum().item())
             n_w += k.numel()
@@ -521,7 +564,11 @@ def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
                     ql.base.device).to(torch.int64)
             shim = _Shim()
             shim.lev0, shim.scale, shim.idx = lev1, sub.scale, idx_new
-            ql2 = kbt.TunedQuantLinear(shim, ql.bias).to(device)
+            if args.osf:
+                oc = osf_new[name][:, ql.colg]
+                ql2 = OsfTunedQuantLinear(shim, ql.bias, oc).to(device)
+            else:
+                ql2 = kbt.TunedQuantLinear(shim, ql.bias).to(device)
             parent = block_q
             parts = name.split(".")
             for p_ in parts[:-1]:
@@ -557,6 +604,10 @@ def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
                        + codes_new[name].to(device).to(torch.int64))
             W = cb_f.to(torch.bfloat16).reshape(
                 sub.R, sub.NG * 12).gather(1, idx_new)
+            if args.osf:
+                oc = osf_new[name][:, qlin[name].colg]
+                W = (oc.to(torch.float32)
+                     * W.to(torch.float32)).to(torch.bfloat16)
             lin = nn.Linear(sub.C_orig, sub.R,
                             bias=qlin[name].bias is not None)
             lin.weight = nn.Parameter(W, requires_grad=False)
@@ -594,14 +645,16 @@ def tune_block_assign(bi, block_fp, subs, nreals, x_q, target, kw, args,
           f"({100 * flip_rate:.2f}%) ent_end {ent_end:.4f} "
           f"unsat {n_unsat} t={stats['wall_s']}s", flush=True)
     log.append(stats)
-    return block_q, final_cb, codes_new, stats
+    osf_cpu = ({n: v.cpu() for n, v in osf_new.items()}
+               if args.osf else None)
+    return block_q, final_cb, codes_new, osf_cpu, stats
 
 
 # ---------------------------------------------------------------------------
 # dump writing + byte-compare
 # ---------------------------------------------------------------------------
 def write_assign_layer(out_dir, sub: kbt.SublayerCodebook, cb_new_fp8,
-                       codes_new_u8):
+                       codes_new_u8, osf_bf16=None):
     """Write <name>.dpk with b0/b1 + cb replaced (m/s/meta byte-identical)
     and the matching new wq. Asserts (a) container unpack == direct gather
     bitwise, (b) k29 honest-bpw invariants identical to the source layer."""
@@ -637,6 +690,19 @@ def write_assign_layer(out_dir, sub: kbt.SublayerCodebook, cb_new_fp8,
     if not torch.equal(W_new.view(torch.int16), W_dir.view(torch.int16)):
         raise RuntimeError(f"{sub.layer_name}: tuned container unpack != "
                            f"direct gather (code planes broken)")
+    if osf_bf16 is not None:
+        # G5: wq becomes the deployed composite bf16(osf_col * unpack); the
+        # dpk container itself stays a classic (unscaled) container and the
+        # scales live in a sibling .osf plane, priced by k29_honest_bpw.
+        assert osf_bf16.dtype == torch.bfloat16 and \
+            tuple(osf_bf16.shape) == (R, sub.NG), (sub.layer_name, "osf")
+        colg = torch.arange(C_orig, dtype=torch.int64) // sub.g
+        W_new = (osf_bf16[:, colg].to(torch.float32)
+                 * W_new.to(torch.float32)).to(torch.bfloat16).contiguous()
+        save_file({"osf": osf_bf16.contiguous()},
+                  os.path.join(out_dir,
+                               f"{sub.layer_name}.osf.safetensors"),
+                  metadata={"meta": sub.meta_json})
     dpk_path = os.path.join(out_dir, f"{sub.layer_name}.dpk.safetensors")
     wq_path = os.path.join(out_dir, f"{sub.layer_name}.wq.safetensors")
     save_file(tensors, dpk_path, metadata={"meta": sub.meta_json})
@@ -741,6 +807,17 @@ def main():
                          "progressive confidence freezing over this many "
                          "equal stages (disables the outward drift). "
                          "0 = off (byte-identical historical path).")
+    ap.add_argument("--osf", choices=("row-group",), default=None,
+                    help="G5: add a continuous per-(row,group) bf16 OUTPUT "
+                         "scale plane (TesseraQ dequant-scale analog), "
+                         "written as <name>.osf.safetensors; wq becomes the "
+                         "scaled composite. +16/g bpw (0.0625 at g=256), "
+                         "priced by the patched k29_honest_bpw. Default off "
+                         "= byte-identical historical path.")
+    ap.add_argument("--lr-osf", type=float, default=None,
+                    help="Adam lr on the osf scales (default = --lr: "
+                         "CO-EQUAL with assignments, the scale-parity "
+                         "hypothesis)")
     ap.add_argument("--lr", type=float, default=3e-2,
                     help="Adam lr on assignment logits")
     ap.add_argument("--lr-lev", type=float, default=1e-3,
@@ -770,6 +847,11 @@ def main():
     ap.add_argument("--log-every", type=int, default=100)
     ap.add_argument("--compare-only", action="store_true")
     args = ap.parse_args()
+    if args.osf and args.mode != "pair":
+        ap.error("--osf is only exercised with --mode pair (untested paths "
+                 "are refused)")
+    if args.lr_osf is None:
+        args.lr_osf = args.lr
 
     src_dir = os.path.abspath(args.src)
     assert os.path.isdir(src_dir), src_dir
@@ -834,6 +916,7 @@ def main():
     tune_log = []
     all_final_cb = {}
     all_codes = {}
+    all_osf = {}
     all_subs = {}
 
     n_blocks = min(args.max_blocks or N_BLOCKS, N_BLOCKS)
@@ -849,7 +932,7 @@ def main():
             nreals[name] = load_nreal_orig(orig_dir, lname)
 
         target = kbt.forward_stream(block_fp, x_fp, layer_kwargs)
-        block_q, final_cb, codes_new, _stats = tune_block_assign(
+        block_q, final_cb, codes_new, osf_new, _stats = tune_block_assign(
             bi, block_fp, subs, nreals, x_q, target, layer_kwargs, args,
             device, tune_log)
         x_q = kbt.forward_stream(block_q, x_q, layer_kwargs)
@@ -858,6 +941,8 @@ def main():
             lname = f"model.layers.{bi}.{name}"
             all_final_cb[lname] = final_cb[name]
             all_codes[lname] = codes_new[name]
+            if args.osf:
+                all_osf[lname] = osf_new[name]
             sub = subs[name]
             # park GPU tensors on CPU; write path only needs cpu tensors
             sub.idx = sub.idx.cpu()
@@ -902,7 +987,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     for lname in all_final_cb:
         write_assign_layer(out_dir, all_subs[lname], all_final_cb[lname],
-                           all_codes[lname])
+                           all_codes[lname], all_osf.get(lname))
     print(f"K31A: wrote {len(all_final_cb)} tuned sublayers -> {out_dir}",
           flush=True)
 
@@ -924,6 +1009,7 @@ def main():
         "retune_lr": args.retune_lr, "batch": args.batch,
         "grad_clip": args.grad_clip,
         "nsamples": args.nsamples, "pra_stages": args.pra_stages,
+        "osf": args.osf, "lr_osf": args.lr_osf if args.osf else None,
         "parameterization": (
             "pair: AdaRound rectified-sigmoid (zeta=1.1, gamma_s=-0.1) "
             "between current slot and nearest-by-value REAL alternative "

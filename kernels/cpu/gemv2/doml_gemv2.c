@@ -558,13 +558,32 @@ i8_tile_g(const Doml2W *w, const DomlQx *qx, float *y, uint32_t t,
     y[t * 4 + 3] = _mm512_reduce_add_ps(ya3) - corr3;
 }
 
+/* [TP17] Split the two MF variants into separate NOINLINE functions.
+ * Both were inlined into one body: objdump measured 1322 instructions for
+ * doml2_gemv_i8_tiles, i.e. ~41 per (row,chunk) — and the loop is ISSUE-bound
+ * (4.3 IPC of a 5-wide machine, TP17 §2b), so the dead variant's code is pure
+ * front-end pressure (Ice Lake DSB is 4K uops; the hot loop should stay in it).
+ * m_full is false for every shipped tensor, so MF=1 is cold code.
+ * Pure code layout: same arithmetic, same order, outputs bitwise identical. */
+static __attribute__((noinline)) void
+i8_tiles_mf0(const Doml2W *w, const DomlQx *qx, float *y, uint32_t t0,
+             uint32_t t1)
+{
+    for (uint32_t t = t0; t < t1; t++) i8_tile_g(w, qx, y, t, 0);
+}
+
+static __attribute__((noinline)) void
+i8_tiles_mf1(const Doml2W *w, const DomlQx *qx, float *y, uint32_t t0,
+             uint32_t t1)
+{
+    for (uint32_t t = t0; t < t1; t++) i8_tile_g(w, qx, y, t, 1);
+}
+
 void doml2_gemv_i8_tiles(const Doml2W *w, const DomlQx *qx, float *y,
                          uint32_t t0, uint32_t t1)
 {
-    if (w->m_full)
-        for (uint32_t t = t0; t < t1; t++) i8_tile_g(w, qx, y, t, 1);
-    else
-        for (uint32_t t = t0; t < t1; t++) i8_tile_g(w, qx, y, t, 0);
+    if (w->m_full) i8_tiles_mf1(w, qx, y, t0, t1);
+    else           i8_tiles_mf0(w, qx, y, t0, t1);
 }
 
 /* ---- FP ---- */

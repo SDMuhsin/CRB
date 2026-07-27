@@ -179,6 +179,10 @@ def main_restore(args):
         sys.argv.append("--eval_extra_ppl")
     if args.eval_arc:
         sys.argv.append("--eval_arc")
+    if args.eval_mmlu:
+        sys.argv.append("--eval_mmlu")
+    if args.eval_hellaswag:
+        sys.argv.append("--eval_hellaswag")
     print("SDRESTORE: launching run.py:", sys.argv, flush=True)
     err = None
     try:
@@ -215,5 +219,11 @@ if __name__ == "__main__":
     ap.add_argument("--eval-arc", action="store_true",
                     help="also evaluate ARC-Easy + ARC-Challenge accuracy "
                          "(passes --eval_arc through to run.py)")
+    ap.add_argument("--eval-mmlu", action="store_true",
+                    help="also evaluate MMLU accuracy (passes --eval_mmlu "
+                         "through to run.py)")
+    ap.add_argument("--eval-hellaswag", action="store_true",
+                    help="also evaluate HellaSwag accuracy (passes "
+                         "--eval_hellaswag through to run.py)")
     args = ap.parse_args()
     main_restore(args)

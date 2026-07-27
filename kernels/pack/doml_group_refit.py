@@ -1294,6 +1294,12 @@ def main_restore(args):
     n_wq = len(glob.glob(os.path.join(dump_dir, "*.wq.safetensors")))
     print(f"K33RESTORE: dump dir {dump_dir} has {n_wq} wq sublayer files",
           flush=True)
+    n_osf = len(glob.glob(os.path.join(dump_dir, "*.osf.safetensors")))
+    if n_osf:
+        print(f"K33RESTORE: dump carries {n_osf} G5 osf scale planes — wq "
+              f"files are the composite scaled weights, so this restore is "
+              f"bit-exact as-is; the honest-bpw gate (k29) prices the "
+              f"planes.", flush=True)
     man_model = manifest_model(dump_dir)
     if args.model and man_model and args.model != man_model:
         raise SystemExit(
@@ -1306,6 +1312,9 @@ def main_restore(args):
     if n_wq != EXPECTED_SUBLAYERS:
         raise SystemExit(f"K33RESTORE FATAL: {n_wq} wq files != "
                          f"{EXPECTED_SUBLAYERS} expected sublayers")
+    if n_osf not in (0, EXPECTED_SUBLAYERS):
+        raise SystemExit(f"K33RESTORE FATAL: {n_osf} osf files != 0 or "
+                         f"{EXPECTED_SUBLAYERS} — partial G5 osf dump")
     os.chdir(REPO)
 
     state = {"n": 0, "t0": time.time()}
